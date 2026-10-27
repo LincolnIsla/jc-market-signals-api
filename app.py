@@ -22,7 +22,7 @@ const el=id=>document.getElementById(id), show=s=>el('status').textContent=s;
 async function api(path,method='POST',data){const token=el('admin').value.trim();if(!token)throw Error('Enter Render ADMIN_TOKEN first.');const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token,...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined,cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d}
 el('start').onclick=async()=>{try{show('Requesting E*TRADE authorization link...');const d=await api('/connect/start');const u=new URL(d.authorize_url);if(u.protocol!=='https:'||u.hostname!=='us.etrade.com')throw Error('Unexpected authorization address');el('authorize').href=u.toString();el('verification').classList.remove('hidden');show('Open the E*TRADE authorization page and approve access.')}catch(e){show(e.message)}};
 el('finish').onclick=async()=>{try{await api('/connect/finish','POST',{verifier:el('verifier').value.trim()});el('verifier').value='';el('test').classList.remove('hidden');show('E*TRADE authorization completed. Test account access next.')}catch(e){show(e.message)}};
-el('test').onclick=async()=>{try{const d=await api('/accounts','GET');const a=d.Accounts?.Account||[];show('Account API request succeeded. Number of accounts: '+(Array.isArray(a)?a.length:1)+'.')}catch(e){show(e.message)}};
+el('test').onclick=async()=>{try{const d=await api('/accounts','GET');const a=d.AccountListResponse?.Accounts?.Account||[];[];show('Account API request succeeded. Number of accounts: '+(Array.isArray(a)?a.length:1)+'.')}catch(e){show(e.message)}};
 </script></body></html>'''
 
 def ok_auth():
