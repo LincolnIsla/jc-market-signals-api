@@ -61,7 +61,7 @@ def start():
         oauth = OAuth1Session(key, client_secret=secret, callback_uri='oob')
         result = oauth.fetch_request_token(auth_base + '/oauth/request_token')
         pending = {'token': result['oauth_token'], 'secret': result['oauth_token_secret'], 'time': time.time()}
-        return jsonify(authorize_url=oauth.authorization_url('https://us.etrade.com/e/t/etws/authorize', key=key))
+        return jsonify(authorize_url='https://us.etrade.com/e/t/etws/authorize?' + urlencode({'key': key, 'token': result['oauth_token']}))
     except Exception:
         app.logger.exception('E*TRADE request-token failure')
         return jsonify(error='Unable to begin E*TRADE authorization'), 502
