@@ -20,6 +20,7 @@ class FakeResponse:
 
 class FakeOAuth:
     calls = []
+    order_mode = 'normal'
     def __init__(self, *args, **kwargs):
         self.calls.append(("init", kwargs))
     def fetch_request_token(self, url):
@@ -40,11 +41,29 @@ class FakeOAuth:
                 "institutionType": "BROKERAGE", "accountType": "BROKER"
             }]}}})
         if url.endswith("/balance.json"):
-            assert params == {"instType": "BROKERAGE", "realTimeNAV": "true"}
+            assert params in (
+                {"instType": "BROKERAGE", "realTimeNAV": "true"},
+                {"instType": "BROKERAGE", "realTimeNAV": "true",
+                 "accountType": "BROKER"},
+            )
             return FakeResponse({"BalanceResponse": {"accountMode": "CASH", "institutionType": "BROKERAGE", "Computed": {
                 "settledCashForInvestment": 500, "cashAvailableForInvestment": 1000,
                 "cashBuyingPower": 1000
             }}})
+        if url.endswith("/orders.json"):
+            assert params["status"] in ("OPEN", "CANCEL_REQUESTED")
+            assert params["count"] == "100"
+            if FakeOAuth.order_mode == "malformed":
+                return FakeResponse({"OrdersResponse": {"Order": "not-an-array"}})
+            if FakeOAuth.order_mode == "loop":
+                return FakeResponse({"OrdersResponse": {"Order": [], "marker": "same-marker"}})
+            if FakeOAuth.order_mode == "paging" and params["status"] == "OPEN":
+                if "marker" not in params:
+                    return FakeResponse({"OrdersResponse": {"Order": [{"orderId": 1}], "marker": "next-page"}})
+                return FakeResponse({"OrdersResponse": {"Order": [{"orderId": 2}], "marker": ""}})
+            if params["status"] == "OPEN":
+                return FakeResponse({"OrdersResponse": {"Order": [{"orderId": 1}]}})
+            return FakeResponse({"OrdersResponse": {"Order": [], "marker": ""}})
         if url.endswith("/portfolio.json"):
             return FakeResponse({"PortfolioResponse": {"AccountPortfolio": [{
                 "accountId": "123456789", "Position": [
@@ -57,6 +76,7 @@ class FakeOAuth:
 class ReadOnlyTests(unittest.TestCase):
     def setUp(self):
         FakeOAuth.calls = []
+        FakeOAuth.order_mode = 'normal'
         self.environ = patch.dict(os.environ, VALID)
         self.environ.start()
         self.app = Flask(__name__)
@@ -262,6 +282,69 @@ class ReadOnlyTests(unittest.TestCase):
             "/production-readonly/accounts/safe-account/classification-check"
         )
         self.assertEqual(response.status_code, 401)
+
+    def test_open_orders_read_only_counts_do_not_authorize_trading(self):
+        self.connect()
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/open-orders",
+            headers=self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["total_active_order_records"], 1)
+        self.assertEqual(response.json["active_order_counts"]["OPEN"], 1)
+        self.assertEqual(response.json["active_order_counts"]["CANCEL_REQUESTED"], 0)
+        self.assertFalse(response.json["cash_reservations_verified"])
+        self.assertFalse(response.json["eligible_for_trading"])
+        self.assertFalse(response.json["orders_enabled"])
+        self.assertNotIn("orderId", str(response.json))
+        self.assertNotIn("safe-account", str(response.json))
+        urls = [item[1] for item in FakeOAuth.calls if item[0] == "get"]
+        self.assertEqual(len([u for u in urls if u.endswith("/orders.json")]), 2)
+        self.assertFalse(any("/orders/place" in u or "/orders/preview" in u for u in urls))
+
+    def test_open_orders_paging_does_not_drop_outstanding_records(self):
+        self.connect()
+        FakeOAuth.order_mode = "paging"
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/open-orders",
+            headers=self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["active_order_counts"]["OPEN"], 2)
+        self.assertFalse(response.json["cash_reservations_verified"])
+        self.assertFalse(response.json["orders_enabled"])
+
+    def test_open_orders_invalid_data_fails_closed(self):
+        self.connect()
+        FakeOAuth.order_mode = "malformed"
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/open-orders",
+            headers=self.auth,
+        )
+        self.assertEqual(response.status_code, 409, response.json)
+        self.assertFalse(response.json["cash_reservations_verified"])
+        self.assertFalse(response.json["orders_enabled"])
+
+    def test_open_orders_repeat_marker_fails_closed(self):
+        self.connect()
+        FakeOAuth.order_mode = "loop"
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/open-orders",
+            headers=self.auth,
+        )
+        self.assertEqual(response.status_code, 409, response.json)
+        self.assertFalse(response.json["orders_enabled"])
+
+    def test_open_orders_requires_admin_and_rejects_unknown_account(self):
+        denied = self.client.get("/production-readonly/accounts/safe-account/open-orders")
+        self.assertEqual(denied.status_code, 401)
+        self.connect()
+        unknown = self.client.get(
+            "/production-readonly/accounts/other/open-orders",
+            headers=self.auth,
+        )
+        self.assertEqual(unknown.status_code, 409, unknown.json)
+        self.assertFalse(unknown.json["orders_enabled"])
 
     def test_size_buy_rounds_down_and_never_trades(self):
         self.connect()

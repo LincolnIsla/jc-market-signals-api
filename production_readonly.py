@@ -127,7 +127,7 @@ def create_reader_blueprint(admin_authorized, oauth_class=OAuth1Session):
         # Only these three account resources. No dynamic URL, method or host.
         if not (path == "/v1/accounts/list.json"
                 or (path.startswith("/v1/accounts/")
-                    and (path.endswith("/balance.json") or path.endswith("/portfolio.json"))
+                    and (path.endswith("/balance.json") or path.endswith("/portfolio.json") or path.endswith("/orders.json"))
                     and path.count("/") == 4)):
             raise ValueError("Disallowed production account endpoint")
         key, secret = keys()
@@ -198,6 +198,7 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
 <button id="balance">Check account balance</button>
 <button id="classify">Compare CASH / MARGIN classifications (read only)</button>
 <button id="positions">Check holdings</button>
+<button id="openorders">Check open orders — Read only</button>
 <h2>Whole-share budget calculator — estimate only</h2>
 <p><small>Enter your proposed limit price per share. The app will check current settled cash and round DOWN to whole shares with a 2% cost reserve. No trades or broker order previews occur here.</small></p>
 <label for="symbol">Stock symbol</label><input id="symbol" value="NVDA" autocomplete="off" maxlength="10">
@@ -442,6 +443,83 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
             return jsonify(
                 error="Unable to verify current E*TRADE cash. No order placed.",
                 mode="calculation_only", orders_enabled=False
+            ), 502
+
+    @bp.get("/accounts/<account_key>/open-orders")
+    def open_orders(account_key):
+        """Count active order records using GET only; NEVER place an order.
+
+        This count does NOT verify remaining buy-order cash reservations.
+        Reconciliation must include partially filled orders and broker funds
+        already reserved before an eventual production preview can be safe.
+        """
+        try:
+            account = validate_account(account_key)
+            path = "/v1/accounts/" + quote(account_key, safe="") + "/orders.json"
+            totals = {}
+            for status_name in ("OPEN", "CANCEL_REQUESTED"):
+                seen = set()
+                marker = None
+                order_count = 0
+                for _ in range(10):
+                    params = {"status": status_name, "count": "100"}
+                    if marker:
+                        params["marker"] = marker
+                    response = production_get(path, params=params)
+                    body = response.get("OrdersResponse")
+                    if not isinstance(body, dict):
+                        raise ValueError("Unexpected E*TRADE List Orders response")
+                    if "Order" not in body and body.get("marker") in (None, ""):
+                        # Empty list is legitimate only when the response
+                        # wrapper exists, not when data is missing entirely.
+                        records = []
+                    else:
+                        records = body.get("Order", [])
+                    if isinstance(records, dict):
+                        records = [records]
+                    if not isinstance(records, list) or any(
+                        not isinstance(entry, dict) for entry in records
+                    ):
+                        raise ValueError("Unexpected E*TRADE Order records")
+                    order_count += len(records)
+                    next_marker = body.get("marker")
+                    if next_marker in (None, ""):
+                        break
+                    if (not isinstance(next_marker, str) or len(next_marker) > 500
+                            or next_marker in seen):
+                        raise ValueError("E*TRADE returned invalid order pagination")
+                    seen.add(next_marker)
+                    marker = next_marker
+                else:
+                    raise ValueError("Order pagination is incomplete")
+                totals[status_name] = order_count
+
+            return jsonify(
+                environment="production",
+                mode="read-only",
+                accountEnding=str(account.get("accountId", ""))[-4:],
+                active_order_counts=totals,
+                total_active_order_records=sum(totals.values()),
+                cash_reservations_verified=False,
+                eligible_for_trading=False,
+                orders_enabled=False,
+                message=(
+                    "Read-only counts of OPEN and CANCEL_REQUESTED orders. "
+                    "Not a full reservation/partial-fill reconciliation. "
+                    "No order was previewed or placed."
+                ),
+            )
+        except ValueError:
+            return jsonify(
+                error="Unable to verify active orders; no trade is permitted",
+                orders_enabled=False,
+                cash_reservations_verified=False,
+            ), 409
+        except Exception:
+            return jsonify(
+                error="E*TRADE active-order lookup failed; no trade is permitted",
+                orders_enabled=False,
+                cash_reservations_verified=False,
             ), 502
 
     @bp.get("/accounts/<account_key>/positions")
