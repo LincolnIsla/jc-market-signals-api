@@ -68,3 +68,20 @@ real-money trading**; it needs review and end-to-end integration first.
 
 E*TRADE API overview: https://developer.etrade.com/getting-started/
 API developer agreement: https://developer.etrade.com/support/terms-of-use
+
+## Stage: read-only open-order inspection (NOT DEPLOYED)
+
+A proposed GET /production-readonly/accounts/{selected}/open-orders endpoint
+fetches E*TRADE List Orders data with status=OPEN and status=CANCEL_REQUESTED.
+It follows bounded pagination markers and returns only counts.
+
+- Open-order COUNTS ARE NOT cash reservations. Partial fills and actual cash
+  reserved by other orders still need separate broker reconciliation.
+- Invalid response, repeated marker, or too many pages blocks inspection.
+- Endpoint output always has cash_reservations_verified=false,
+  eligible_for_trading=false, and orders_enabled=false.
+- No order IDs or account keys are exposed in the output.
+- There are no production preview, placement, change or cancellation routes.
+- Staged draft PR only; Render deployment on main remains unchanged.
+
+Docs: https://apisb.etrade.com/docs/api/order/api-order-v1.html
