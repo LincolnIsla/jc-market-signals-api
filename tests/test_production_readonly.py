@@ -134,6 +134,63 @@ class ReadOnlyTests(unittest.TestCase):
         }, json={"symbol": "NVDA"})
         self.assertEqual(r.status_code, 404)
 
+
+    def test_size_buy_rounds_down_and_never_trades(self):
+        self.connect()
+        url = "/production-readonly/accounts/safe-account/size-buy"
+        response = self.client.get(url, headers=self.auth,
+            query_string={"symbol": "NVDA", "limit_price": "185.00", "budget": "1000.00"})
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["shares"], 2)  # only $500 settled in mocked account
+        self.assertEqual(response.json["estimated_purchase_at_limit"], "370.00")
+        self.assertEqual(response.json["cost_allowance_2pct"], "7.4000")
+        self.assertFalse(response.json["orders_enabled"])
+        self.assertFalse(response.json["broker_preview_performed"])
+        self.assertFalse(response.json["broker_order_submitted"])
+        self.assertTrue(response.json["requires_explicit_confirmation"])
+        self.assertFalse(any("/orders/" in str(item) for item in FakeOAuth.calls))
+
+    def test_size_buy_rejects_expensive_shares(self):
+        self.connect()
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/size-buy",
+            headers=self.auth,
+            query_string={"symbol": "NVDA", "limit_price": "600.00", "budget": "1000.00"}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json["orders_enabled"])
+
+    def test_size_buy_requires_admin_auth(self):
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/size-buy",
+            query_string={"symbol": "NVDA", "limit_price": "100.00"}
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_size_buy_requires_cash_account_and_cash_balance(self):
+        self.connect()
+        with patch("production_readonly.get_balance", return_value={
+            "accountMode": "MARGIN", "institutionType": "BROKERAGE",
+            "settledCashForInvestment": 500,
+            "cashAvailableForInvestment": 1000, "cashBuyingPower": 1000
+        }):
+            response = self.client.get(
+                "/production-readonly/accounts/safe-account/size-buy",
+                headers=self.auth,
+                query_string={"symbol": "NVDA", "limit_price": "100.00"}
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("CASH", response.json["error"])
+
+    def test_size_buy_rejects_too_large_budget(self):
+        self.connect()
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/size-buy",
+            headers=self.auth,
+            query_string={"symbol": "NVDA", "limit_price": "100.00", "budget": "1000.01"}
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_balance_missing_computed_is_rejected(self):
         with self.assertRaises(ValueError):
             get_balance({"BalanceResponse": {}})
