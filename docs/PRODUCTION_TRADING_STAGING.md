@@ -112,3 +112,26 @@ Before any future LIVE use, recalculate with up-to-date limit price,
 cash/positions and open orders immediately before preview and confirm,
 and compare the E*TRADE preview's actual total and account before any
 placement. Never buy on the basis of stale scanner prices.
+
+## Read-only account-screen budget calculator
+
+The staged /production-readonly/connect-ui page now includes a
+Calculate Whole Shares — No Trade button. It accepts a user-entered
+ticker, limit price and budget (default $1,000), retrieves fresh
+E*TRADE production account/balance data through the GET-only reader,
+and calls calculate_budgeted_buy.
+
+- Refuses to calculate unless both account and balance explicitly
+  classify the account as CASH and BROKERAGE.
+- Uses verified settled cash, available investment cash and cash
+  buying power, with a 2% estimated cost allowance.
+- Displays proposed whole shares, estimated total, reserve and
+  remaining budget. It is an estimate, NOT an E*TRADE order preview.
+- No production order API is called, and there are no production BUY,
+  SELL, preview, or submit routes in this module.
+- User manually supplies a limit price; the calculator does not
+  fetch or imply a live stock quote.
+
+This branch is NOT deployed. Do not merge or enable production access
+without reviewing authentication, logging/privacy, actual brokerage
+data mappings, and user-facing workflow.
