@@ -112,7 +112,13 @@ class ReadOnlyTests(unittest.TestCase):
             self.assertIn(b"$('status').onclick", script.data)
             self.assertNotIn(b"testsecret", script.data)
             blocked = self.client.get("/production-readonly/status", headers=self.auth)
-            self.assertEqual(blocked.status_code, 404)
+            self.assertEqual(blocked.status_code, 200)
+            self.assertFalse(blocked.json["ready"])
+            self.assertEqual(set(blocked.json["missing_settings"]), set((
+                "ETRADE_PRODUCTION_READONLY_ENABLED",
+                "ETRADE_PRODUCTION_CONSUMER_KEY",
+                "ETRADE_PRODUCTION_CONSUMER_SECRET",
+            )))
 
     def test_static_setup_page_available_without_enable_flag_or_keys(self):
         with patch.dict(os.environ, {
@@ -126,7 +132,8 @@ class ReadOnlyTests(unittest.TestCase):
             self.assertIn(b"READ ONLY", response.data)
             self.assertNotIn(b"testsecret", response.data)
             status = self.client.get("/production-readonly/status", headers=self.auth)
-            self.assertEqual(status.status_code, 404)
+            self.assertEqual(status.status_code, 200)
+            self.assertFalse(status.json.get("ready", True))
             self.assertFalse(status.json.get("orders_enabled", False))
             oauth_start = self.client.post(
                 "/production-readonly/connect/start",
@@ -137,7 +144,31 @@ class ReadOnlyTests(unittest.TestCase):
     def test_disabled_without_flag(self):
         with patch.dict(os.environ, {"ETRADE_PRODUCTION_READONLY_ENABLED": "false"}):
             r = self.client.get("/production-readonly/status", headers=self.auth)
-            self.assertEqual(r.status_code, 404)
+            self.assertEqual(r.status_code, 200)
+            self.assertFalse(r.json["ready"])
+            self.assertEqual(r.json["missing_settings"], ["ETRADE_PRODUCTION_READONLY_ENABLED"])
+            refused = self.client.get("/production-readonly/accounts", headers=self.auth)
+            self.assertEqual(refused.status_code, 404)
+
+    def test_missing_one_production_key_is_diagnosed_without_leaking_values(self):
+        with patch.dict(os.environ, {"ETRADE_PRODUCTION_CONSUMER_SECRET": ""}):
+            r = self.client.get("/production-readonly/status", headers=self.auth)
+            self.assertEqual(r.status_code, 200)
+            self.assertFalse(r.json["ready"])
+            self.assertEqual(r.json["missing_settings"], ["ETRADE_PRODUCTION_CONSUMER_SECRET"])
+            self.assertNotIn("testkey", r.get_data(as_text=True))
+            self.assertNotIn("testsecret", r.get_data(as_text=True))
+            unauthenticated = self.client.get("/production-readonly/status")
+            self.assertEqual(unauthenticated.status_code, 401)
+            self.assertNotIn("missing_settings", unauthenticated.get_data(as_text=True))
+
+    def test_correct_flag_both_keys_readonly_ready(self):
+        r = self.client.get("/production-readonly/status", headers=self.auth)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json["ready"])
+        self.assertEqual(r.json["missing_settings"], [])
+        self.assertFalse(r.json["connected"])
+        self.assertFalse(r.json["orders_enabled"])
 
     def test_admin_auth_required(self):
         r = self.client.get("/production-readonly/status")
