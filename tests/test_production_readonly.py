@@ -81,6 +81,26 @@ class ReadOnlyTests(unittest.TestCase):
         }, json={"verifier": "12345"})
         self.assertEqual(r.status_code, 200)
 
+    def test_static_setup_page_available_without_enable_flag_or_keys(self):
+        with patch.dict(os.environ, {
+            "ETRADE_PRODUCTION_READONLY_ENABLED": "false",
+            "ETRADE_PRODUCTION_CONSUMER_KEY": "",
+            "ETRADE_PRODUCTION_CONSUMER_SECRET": ""
+        }):
+            response = self.client.get("/production-readonly/connect-ui")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"ETRADE_PRODUCTION_READONLY_ENABLED", response.data)
+            self.assertIn(b"READ ONLY", response.data)
+            self.assertNotIn(b"testsecret", response.data)
+            status = self.client.get("/production-readonly/status", headers=self.auth)
+            self.assertEqual(status.status_code, 404)
+            self.assertFalse(status.json.get("orders_enabled", False))
+            oauth_start = self.client.post(
+                "/production-readonly/connect/start",
+                headers={**self.auth, "Origin": ORIGIN}
+            )
+            self.assertEqual(oauth_start.status_code, 404)
+
     def test_disabled_without_flag(self):
         with patch.dict(os.environ, {"ETRADE_PRODUCTION_READONLY_ENABLED": "false"}):
             r = self.client.get("/production-readonly/status", headers=self.auth)

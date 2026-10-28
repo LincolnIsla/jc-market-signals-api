@@ -95,12 +95,14 @@ def create_reader_blueprint(admin_authorized, oauth_class=OAuth1Session):
 
     @bp.before_request
     def guard():
-        if not enabled():
-            return jsonify(error="Production account reader is disabled"), 404
-        # Show only a static connection page without credentials. All data and
-        # actions still require the administrator's authenticated API request.
+        # Static setup instructions are always accessible; they do not
+        # expose credentials, OAuth tokens or account information.
         if request.endpoint == "production_reader.connect_ui":
             return None
+        # Fail closed for every OAuth and account endpoint until the
+        # opt-in flag AND both separate production credentials are set.
+        if not enabled():
+            return jsonify(error="Production account reader is disabled. Verify the production read-only flag and both production key variables in Render."), 404
         if not admin_authorized():
             return jsonify(error="Administrator authentication required"), 401
         if request.method not in ("GET", "HEAD"):
@@ -178,6 +180,7 @@ button:disabled{background:#94a2b5}pre{white-space:pre-wrap;overflow-wrap:anywhe
 small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
 </style></head><body><main><h1>E*TRADE Production Account Reader</h1>
 <p class="warn">READ ONLY. No live buying, selling, or orders are enabled.</p>
+<p><strong>Setup:</strong> If Check status says the reader is disabled, open your Render service's Environment page and confirm these three variable names are present: <code>ETRADE_PRODUCTION_READONLY_ENABLED</code> with value <code>true</code>, plus <code>ETRADE_PRODUCTION_CONSUMER_KEY</code> and <code>ETRADE_PRODUCTION_CONSUMER_SECRET</code> with your separate E*TRADE LIVE credentials. Save and deploy in Render. Do not paste any keys in ChatGPT.</p>
 <p>This page is for checking production account access before preparing live trading. Use the ADMIN_TOKEN from Render, not your E*TRADE Consumer Secret. The token stays in this open page's memory only.</p>
 <label for="token">Render ADMIN_TOKEN</label><input id="token" type="password" autocomplete="off">
 <button id="status">Check status</button>

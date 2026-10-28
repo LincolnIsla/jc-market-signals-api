@@ -429,8 +429,9 @@ def device_logout_all():
         db.execute('DELETE FROM device_sessions')
     return expire_device(jsonify(environment='sandbox', authenticated=False))
 
-# Production ACCOUNT READER only. Unregistered by default.
-# This does not enable or change any production trading/order endpoint.
-if os.getenv('ETRADE_PRODUCTION_READONLY_ENABLED') == 'true':
-    from production_readonly import create_reader_blueprint
-    app.register_blueprint(create_reader_blueprint(ok_auth))
+# Production ACCOUNT READER only. The static setup page remains reachable
+# even when credentials or feature flags have not yet been configured.
+# All production account-data and OAuth endpoints remain disabled by default
+# in the blueprint's before_request guard. No production trading endpoints.
+from production_readonly import create_reader_blueprint
+app.register_blueprint(create_reader_blueprint(ok_auth))
