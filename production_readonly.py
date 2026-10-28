@@ -6,6 +6,7 @@ or calls the existing sandbox order-placement code. The E*TRADE OAuth
 consent is not restricted to read-only: safeguards apply in our code.
 """
 import os
+import re
 import secrets
 import time
 from threading import RLock
@@ -333,6 +334,50 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
             return jsonify(error=str(exc)), 409
         except Exception:
             return jsonify(error="Production balance lookup failed"), 502
+
+    @bp.get("/accounts/<account_key>/classification-check")
+    def classification_check(account_key):
+        """Compare read-only balance modes with/without accountType.
+
+        Diagnostic only: NEVER decides whether orders or borrowing are allowed.
+        No account identifiers or dollar balances are returned.
+        """
+        try:
+            account = validate_account(account_key)
+            account_type = account.get("accountType")
+            if (not isinstance(account_type, str)
+                    or not re.fullmatch(r"[A-Z_]{1,40}", account_type)):
+                raise ValueError("E*TRADE did not provide a recognized account type")
+            path = "/v1/accounts/" + quote(account_key, safe="") + "/balance.json"
+            base = {"instType": "BROKERAGE", "realTimeNAV": "true"}
+            default_mode = get_balance(production_get(path, params=base)).get("accountMode")
+            typed_mode = get_balance(production_get(
+                path, params={**base, "accountType": account_type}
+            )).get("accountMode")
+            list_mode = account.get("accountMode")
+            consistent = (list_mode == default_mode == typed_mode == "CASH")
+            return jsonify(
+                environment="production", mode="read-only",
+                account_mode_from_list=list_mode,
+                registered_account_type=account_type,
+                balance_mode_without_account_type=default_mode,
+                balance_mode_with_account_type=typed_mode,
+                cash_classification_consistent=consistent,
+                trading_eligible=False,
+                orders_enabled=False,
+                message=(
+                    "Diagnostic only. No order was placed. A matching CASH result "
+                    "does not by itself authorize live trading. Review actual "
+                    "settled cash and broker account permissions separately."
+                ),
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc), orders_enabled=False), 409
+        except Exception:
+            return jsonify(
+                error="E*TRADE classification check failed; no trading was attempted",
+                orders_enabled=False,
+            ), 502
 
     @bp.get("/accounts/<account_key>/size-buy")
     def size_buy(account_key):
