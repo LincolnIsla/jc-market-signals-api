@@ -373,13 +373,16 @@ $('calculate').onclick=run(async()=>{
                 symbol, account, normalized,
                 price, budget
             )
-            return jsonify(
-                **proposed, mode="calculation_only",
-                environment="production", orders_enabled=False,
-                broker_preview_performed=False, broker_order_submitted=False,
+            proposed.update(
+                mode="calculation_only",
+                environment="production",
+                orders_enabled=False,
+                broker_preview_performed=False,
+                broker_order_submitted=False,
                 pricing_source="USER_ENTERED_LIMIT_PRICE",
                 message="Estimate only. No order was previewed or placed."
             )
+            return jsonify(proposed)
         except (ValueError, OrderBlocked) as exc:
             return jsonify(
                 error=str(exc), mode="calculation_only",
