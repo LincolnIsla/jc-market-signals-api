@@ -4,6 +4,7 @@ on:
     branches:
       - main
       - feature/live-trading-guardrails-20261028
+      - feature/cash-only-preflight-20261028
   pull_request:
     branches:
       - main
@@ -21,8 +22,10 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Verify Python syntax without connecting to E*TRADE
-        run: python -m compileall -q app.py production_checks.py production_readonly.py tests
+        run: python -m compileall -q app.py production_checks.py production_readonly.py live_cash_preflight.py tests
       - name: Verify connection-page JavaScript syntax
         run: node --check production_ui.js
       - name: Offline safeguard and read-only API tests
         run: python -m unittest discover -s tests -p 'test_production*.py' -v
+      - name: Cash-only fail-closed validator tests
+        run: python -m unittest discover -s tests -p 'test_live_cash_preflight.py' -v
