@@ -48,7 +48,7 @@ def connect_ui():
 
 @app.before_request
 def protect():
-    if request.path in ('/health', '/connect-ui') or request.path.startswith('/trading/') or request.path.startswith('/auth/'):
+    if request.path in ('/health', '/connect-ui') or request.path.startswith(('/trading/', '/auth/', '/production-readonly/')):
         return None
     if not ok_auth():
         return jsonify(error='Unauthorized'), 401
@@ -428,3 +428,9 @@ def device_logout_all():
     with session_db() as db:
         db.execute('DELETE FROM device_sessions')
     return expire_device(jsonify(environment='sandbox', authenticated=False))
+
+# Production ACCOUNT READER only. Unregistered by default.
+# This does not enable or change any production trading/order endpoint.
+if os.getenv('ETRADE_PRODUCTION_READONLY_ENABLED') == 'true':
+    from production_readonly import create_reader_blueprint
+    app.register_blueprint(create_reader_blueprint(ok_auth))
