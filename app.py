@@ -48,7 +48,7 @@ def connect_ui():
 
 @app.before_request
 def protect():
-    if request.path in ('/health', '/connect-ui') or request.path.startswith('/trading/'):
+    if request.path in ('/health', '/connect-ui') or request.path.startswith('/trading/') or request.path.startswith('/auth/'):
         return None
     if not ok_auth():
         return jsonify(error='Unauthorized'), 401
@@ -309,3 +309,122 @@ def submit_order():
         with order_db() as db:
             db.execute("UPDATE previews SET state='UNKNOWN' WHERE token=?", (token,))
         return jsonify(environment='sandbox', broker_confirmed=False, error=str(e) if isinstance(e, ValueError) else 'Sandbox submission status unknown. Check E*TRADE orders before trying again.'), 502
+
+
+# Browser device sessions. Requires a durable, operator-configured SQLite path.
+import hashlib
+from pathlib import Path
+
+DEVICE_COOKIE = '__Host-jc_device'
+SESSION_DB_PATH = os.getenv('AUTH_SESSION_DB_PATH', '')
+DEVICE_LIFETIME = 30 * 86400
+DEVICE_IDLE = 7 * 86400
+_original_ok_auth = ok_auth
+
+def session_db():
+    path = Path(SESSION_DB_PATH)
+    if not SESSION_DB_PATH or not path.is_absolute() or str(path).startswith('/tmp/') or not path.parent.is_dir():
+        raise RuntimeError('Configure AUTH_SESSION_DB_PATH on a persistent Render disk before enabling device login')
+    db = sqlite3.connect(str(path), timeout=10)
+    db.row_factory = sqlite3.Row
+    db.execute('CREATE TABLE IF NOT EXISTS device_sessions (id_hash TEXT PRIMARY KEY, created REAL NOT NULL, expires REAL NOT NULL, touched REAL NOT NULL, idle INTEGER NOT NULL, generation TEXT NOT NULL)')
+    db.execute('CREATE TABLE IF NOT EXISTS device_login_attempts (at REAL NOT NULL)')
+    return db
+
+def session_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def auth_generation():
+    return hashlib.sha256(('jc-device-generation:' + admin).encode()).hexdigest()
+
+def valid_device():
+    token = request.cookies.get(DEVICE_COOKIE, '')
+    if not token or len(token) > 128 or not admin:
+        return False
+    try:
+        now = time.time()
+        with session_db() as db:
+            row = db.execute('SELECT * FROM device_sessions WHERE id_hash=?', (session_hash(token),)).fetchone()
+            if not row or row['expires'] <= now or row['touched'] + row['idle'] <= now or row['generation'] != auth_generation():
+                return False
+            if request.method not in ('GET', 'HEAD') and request.headers.get('Origin') != TRADING_ORIGIN:
+                return False
+            db.execute('UPDATE device_sessions SET touched=? WHERE id_hash=?', (now, session_hash(token)))
+        return True
+    except (RuntimeError, sqlite3.Error):
+        return False
+
+def ok_auth():
+    return _original_ok_auth() or valid_device()
+
+def expire_device(response):
+    response.delete_cookie(DEVICE_COOKIE, path='/', secure=True, httponly=True, samesite='Lax')
+    return response
+
+@app.before_request
+def device_origin_guard():
+    if request.path.startswith('/auth/') and request.method not in ('GET', 'HEAD'):
+        if request.headers.get('Origin') != TRADING_ORIGIN:
+            return jsonify(environment='sandbox', error='Origin is not allowed'), 403
+    return None
+
+@app.get('/auth/session')
+def device_status():
+    try:
+        with session_db():
+            pass
+    except (RuntimeError, sqlite3.Error):
+        return jsonify(environment='sandbox', available=False, authenticated=False,
+                       error='Remember This Device requires the backend session update and durable session storage'), 503
+    return jsonify(environment='sandbox', available=True, authenticated=valid_device())
+
+@app.post('/auth/login')
+def device_login():
+    if mode != 'sandbox':
+        return jsonify(environment=mode, error='Production trading remains disabled'), 403
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or type(body.get('remember_device')) is not bool:
+        return jsonify(environment='sandbox', error='Choose whether to remember this device'), 400
+    try:
+        with session_db() as db:
+            now = time.time()
+            db.execute('DELETE FROM device_login_attempts WHERE at < ?', (now - 60,))
+            if db.execute('SELECT count(*) FROM device_login_attempts').fetchone()[0] >= 30:
+                return jsonify(environment='sandbox', error='Too many sign-in attempts. Try again in a minute.'), 429
+            db.execute('INSERT INTO device_login_attempts VALUES (?)', (now,))
+    except (RuntimeError, sqlite3.Error):
+        return jsonify(environment='sandbox', error='Backend device login needs durable AUTH_SESSION_DB_PATH storage'), 503
+    if not _original_ok_auth():
+        return jsonify(environment='sandbox', error='Sign-in failed'), 401
+    token = secrets.token_urlsafe(48)
+    remember = body['remember_device']
+    lifetime = DEVICE_LIFETIME if remember else 8 * 3600
+    idle = DEVICE_IDLE if remember else 8 * 3600
+    old = request.cookies.get(DEVICE_COOKIE, '')
+    with session_db() as db:
+        db.execute('DELETE FROM device_sessions WHERE expires <= ? OR touched + idle <= ?', (now, now))
+        if old:
+            db.execute('DELETE FROM device_sessions WHERE id_hash=?', (session_hash(old),))
+        db.execute('INSERT INTO device_sessions VALUES (?,?,?,?,?,?)', (session_hash(token), now, now + lifetime, now, idle, auth_generation()))
+    response = jsonify(environment='sandbox', authenticated=True, remembered=remember, expires_at=now + lifetime)
+    response.set_cookie(DEVICE_COOKIE, token, max_age=lifetime if remember else None,
+                        path='/', secure=True, httponly=True, samesite='Lax')
+    return response
+
+@app.post('/auth/logout')
+def device_logout():
+    token = request.cookies.get(DEVICE_COOKIE, '')
+    try:
+        with session_db() as db:
+            db.execute('DELETE FROM device_sessions WHERE id_hash=?', (session_hash(token),))
+    except (RuntimeError, sqlite3.Error):
+        return jsonify(environment='sandbox', error='Could not revoke server session. Retry Sign Out.'), 503
+    return expire_device(jsonify(environment='sandbox', authenticated=False))
+
+@app.post('/auth/logout-all')
+def device_logout_all():
+    if not ok_auth():
+        return jsonify(environment='sandbox', error='Sign in first'), 401
+    with session_db() as db:
+        db.execute('DELETE FROM device_sessions')
+    return expire_device(jsonify(environment='sandbox', authenticated=False))
