@@ -81,6 +81,27 @@ class ReadOnlyTests(unittest.TestCase):
         }, json={"verifier": "12345"})
         self.assertEqual(r.status_code, 200)
 
+    def test_static_buttons_script_loads_without_credentials(self):
+        with patch.dict(os.environ, {
+            "ETRADE_PRODUCTION_READONLY_ENABLED": "false",
+            "ETRADE_PRODUCTION_CONSUMER_KEY": "",
+            "ETRADE_PRODUCTION_CONSUMER_SECRET": "",
+        }):
+            page = self.client.get("/production-readonly/connect-ui")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b'<script defer src="/production-readonly/connect-ui.js"></script>', page.data)
+            self.assertNotIn(b'<script>', page.data)
+            self.assertIn("script-src 'self'", page.headers.get("Content-Security-Policy"))
+            self.assertIn(b"Loading page controls", page.data)
+            script = self.client.get("/production-readonly/connect-ui.js")
+            self.assertEqual(script.status_code, 200)
+            self.assertIn("javascript", script.mimetype)
+            self.assertIn(b"Controls loaded", script.data)
+            self.assertIn(b"$('status').onclick", script.data)
+            self.assertNotIn(b"testsecret", script.data)
+            blocked = self.client.get("/production-readonly/status", headers=self.auth)
+            self.assertEqual(blocked.status_code, 404)
+
     def test_static_setup_page_available_without_enable_flag_or_keys(self):
         with patch.dict(os.environ, {
             "ETRADE_PRODUCTION_READONLY_ENABLED": "false",
