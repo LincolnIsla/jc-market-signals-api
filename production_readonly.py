@@ -198,6 +198,7 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
 <button id="balance">Check account balance</button>
 <button id="classify">Compare CASH / MARGIN classifications (read only)</button>
 <button id="positions">Check holdings</button>
+<button id="openorders">Check open orders — Read only</button>
 <h2>Whole-share budget calculator — estimate only</h2>
 <p><small>Enter your proposed limit price per share. The app will check current settled cash and round DOWN to whole shares with a 2% cost reserve. No trades or broker order previews occur here.</small></p>
 <label for="symbol">Stock symbol</label><input id="symbol" value="NVDA" autocomplete="off" maxlength="10">
