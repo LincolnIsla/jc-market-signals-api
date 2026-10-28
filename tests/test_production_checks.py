@@ -45,7 +45,8 @@ class ProductionChecksTest(unittest.TestCase):
 
     def test_fixed_budget_no_fractional_shares(self):
         result = calculate_budgeted_buy("NVDA", ACCOUNT, BALANCE, "98.04")
-        self.assertEqual(result["shares"], 10)
+        # Ten would reserve $1,000.008 including the 2% buffer.
+        self.assertEqual(result["shares"], 9)
         self.assertLessEqual(float(result["estimated_purchase_at_limit"]), 1000)
 
     def test_fixed_budget_cannot_exceed_1000(self):
