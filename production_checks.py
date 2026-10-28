@@ -144,3 +144,44 @@ def calculate_budgeted_buy(symbol, account, balance, limit_price, budget="1000.0
         "requires_explicit_confirmation": True,
         "orders_enabled": False,
     }
+
+
+def estimate_whole_shares_budget_only(symbol, limit_price, budget="1000.00"):
+    """Unverified math-only estimate; does not inspect broker buying power.
+
+    Used when E*TRADE classifies the selected account as margin-enabled,
+    or does not provide an explicit CASH classification in both responses.
+    This function NEVER emits an executable order or trading approval.
+    """
+    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z][A-Z.]{0,9}", symbol):
+        raise OrderBlocked("Invalid stock symbol")
+    requested = amount(budget, "purchase budget")
+    if requested <= 0 or requested > MAX_NOTIONAL or requested.as_tuple().exponent < -2:
+        raise OrderBlocked("Budget must be between $0.01 and $1,000, with at most two decimals")
+    price = amount(limit_price, "limit price")
+    if price <= 0 or price > Decimal("10000000") or price.as_tuple().exponent < -2:
+        raise OrderBlocked("Limit price must be positive with at most two decimals")
+    shares = int(requested // (price * CASH_BUFFER))
+    if shares < 1:
+        raise OrderBlocked("Budget is too small for one whole share at that limit price with the 2% cost allowance")
+    if shares > 1000000:
+        raise OrderBlocked("Share quantity is over the permitted maximum")
+    notional = price * shares
+    allowance = notional * (CASH_BUFFER - Decimal("1"))
+    remaining = requested - notional * CASH_BUFFER
+    return {
+        "symbol": symbol,
+        "shares": shares,
+        "requested_budget": f"{requested:.2f}",
+        "limit_price": f"{price:.2f}",
+        "estimated_purchase_at_limit": f"{notional:.2f}",
+        "cost_allowance_2pct": f"{allowance:.2f}",
+        "budget_remaining_after_allowance": f"{remaining:.2f}",
+        "mode": "budget_only_estimate",
+        "cash_verified": False,
+        "trading_eligible": False,
+        "broker_preview_performed": False,
+        "broker_order_submitted": False,
+        "orders_enabled": False,
+        "warning": "MATHEMATICAL ESTIMATE ONLY. Cash availability has NOT been verified. Do not use this result to place a trade or borrow on margin.",
+    }
