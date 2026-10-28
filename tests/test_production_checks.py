@@ -1,6 +1,6 @@
 """Offline tests using synthetic example balances. Not E*TRADE integration tests."""
 import unittest
-from production_checks import OrderBlocked, validate_cash_limit_order, calculate_budgeted_buy
+from production_checks import OrderBlocked, validate_cash_limit_order, calculate_budgeted_buy, estimate_whole_shares_budget_only
 
 ACCOUNT = {
     "accountMode": "CASH", "institutionType": "BROKERAGE",
@@ -21,6 +21,35 @@ BUY = {
 
 
 class ProductionChecksTest(unittest.TestCase):
+
+    def test_unverified_estimate_uses_budget_without_margin_power(self):
+        result = estimate_whole_shares_budget_only("NVDA", "185.00", "1000.00")
+        self.assertEqual(result["shares"], 5)
+        self.assertEqual(result["estimated_purchase_at_limit"], "925.00")
+        self.assertEqual(result["cost_allowance_2pct"], "18.50")
+        self.assertEqual(result["budget_remaining_after_allowance"], "56.50")
+        self.assertFalse(result["cash_verified"])
+        self.assertFalse(result["trading_eligible"])
+        self.assertFalse(result["orders_enabled"])
+        self.assertNotIn("order", result)
+
+    def test_unverified_estimate_never_exceeds_1000(self):
+        for budget in ("1000.01", "-1", "NaN", "Infinity", "0"):
+            with self.subTest(budget=budget), self.assertRaises(OrderBlocked):
+                estimate_whole_shares_budget_only("NVDA", "100.00", budget)
+
+    def test_unverified_estimate_rejects_invalid_price(self):
+        for price in ("0", "-1", "Infinity", "1.234"):
+            with self.subTest(price=price), self.assertRaises(OrderBlocked):
+                estimate_whole_shares_budget_only("NVDA", price)
+
+    def test_unverified_estimate_requires_whole_share(self):
+        with self.assertRaises(OrderBlocked):
+            estimate_whole_shares_budget_only("NVDA", "990.00")
+
+    def test_unverified_estimate_rejects_bad_symbol(self):
+        with self.assertRaises(OrderBlocked):
+            estimate_whole_shares_budget_only("bad token", "100.00")
 
     def test_fixed_budget_rounds_down_to_five_shares(self):
         result = calculate_budgeted_buy("NVDA", ACCOUNT, BALANCE, "185.00", "1000.00")
