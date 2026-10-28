@@ -54,3 +54,36 @@ The existing backend currently uses a literal Sandbox API host and blocks
 trading; it disables orders.
 
 Official API reference: https://developer.etrade.com/getting-started
+
+## Staged production account reader (not deployed)
+
+The development branch also includes `production_readonly.py` and
+`tests/test_production_readonly.py`. The reader is registered by `app.py`
+**only** when `ETRADE_PRODUCTION_READONLY_ENABLED=true` and the code is
+actually deployed. It is currently not present in the Render `main` deploy.
+
+- `ETRADE_PRODUCTION_CONSUMER_KEY`: the separate **production** application key.
+- `ETRADE_PRODUCTION_CONSUMER_SECRET`: its production secret.
+- `ETRADE_PRODUCTION_READONLY_ENABLED`: default absent/false, so no routes.
+- Do NOT change `ETRADE_ENV=sandbox`, `ETRADE_CONSUMER_KEY`, or
+  `ETRADE_CONSUMER_SECRET` for the existing Sandbox application.
+- Do NOT put credentials in chat, browser localStorage, GitHub or query URLs.
+
+Once validated and deployed for read-only testing, use the same-origin UI:
+`https://jc-market-signals-api.onrender.com/production-readonly/connect-ui`.
+It requires the Render ADMIN_TOKEN when making requests and gives options to
+authorize production separately, list accounts, inspect balance and holdings.
+
+Important: **The E*TRADE OAuth approval itself is not read-only**. Our
+application limits its own broker REST requests to GET account/list,
+balance and portfolio; it has no production preview or place endpoints.
+Sessions are in memory and will be lost on app restarts. The account reader
+exposes a first page of portfolio positions only; it must never be used
+directly for sell validation until pagination and pending orders are handled.
+
+Offline unit tests (mock broker, no network):
+```
+python -m unittest discover -s tests -p 'test_production*.py' -v
+```
+The GitHub workflow stages the same tests on the development branch.
+A passing test is **not** evidence of broker production compatibility.
