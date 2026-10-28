@@ -99,12 +99,13 @@ def create_reader_blueprint(admin_authorized, oauth_class=OAuth1Session):
         # expose credentials, OAuth tokens or account information.
         if request.endpoint in ("production_reader.connect_ui", "production_reader.connect_ui_js"):
             return None
-        # Fail closed for every OAuth and account endpoint until the
-        # opt-in flag AND both separate production credentials are set.
-        if not enabled():
-            return jsonify(error="Production account reader is disabled. Verify the production read-only flag and both production key variables in Render."), 404
+        # Always authenticate before revealing even non-secret setting names.
         if not admin_authorized():
             return jsonify(error="Administrator authentication required"), 401
+        # Status is safe for authenticated diagnostics even when disabled.
+        # Every other OAuth/account resource stays blocked until configured.
+        if request.endpoint != "production_reader.status" and not enabled():
+            return jsonify(error="Production account reader is disabled. Verify the production read-only flag and both production key variables in Render."), 404
         if request.method not in ("GET", "HEAD"):
             # Origin header required, including for same-origin POSTs.
             if request.headers.get("Origin") != APP_ORIGIN:
@@ -218,10 +219,25 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
 
     @bp.get("/status")
     def status():
+        # Report presence of required settings, NEVER their values or length.
+        # This endpoint still requires ADMIN_TOKEN through before_request.
+        missing = []
+        if os.getenv(FLAG) != "true":
+            missing.append(FLAG)
+        for name in ("ETRADE_PRODUCTION_CONSUMER_KEY",
+                     "ETRADE_PRODUCTION_CONSUMER_SECRET"):
+            if not os.getenv(name):
+                missing.append(name)
         with lock:
-            connected = state["access"] is not None
-        return jsonify(mode="read-only", environment="production",
-                       connected=connected, orders_enabled=False)
+            connected = state["access"] is not None if not missing else False
+        return jsonify(
+            mode="read-only", environment="production",
+            ready=not missing, connected=connected, orders_enabled=False,
+            missing_settings=missing,
+            message=("Reader configured. Use Start production authorization."
+                     if not missing else
+                     "Reader disabled: check the listed variable names in Render Environment.")
+        )
 
     @bp.post("/connect/start")
     def start():
