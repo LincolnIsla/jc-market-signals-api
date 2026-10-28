@@ -219,6 +219,50 @@ class ReadOnlyTests(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+    def test_classification_check_uses_optional_registered_account_type(self):
+        self.connect()
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/classification-check",
+            headers=self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["account_mode_from_list"], "CASH")
+        self.assertEqual(response.json["registered_account_type"], "BROKER")
+        self.assertTrue(response.json["cash_classification_consistent"])
+        self.assertFalse(response.json["trading_eligible"])
+        self.assertFalse(response.json["orders_enabled"])
+        self.assertNotIn("accountIdKey", response.json)
+        self.assertNotIn("accountId", response.json)
+        self.assertEqual([
+            c[2] for c in FakeOAuth.calls
+            if c[0] == "get" and c[1].endswith("/balance.json")
+        ], [
+            {"instType": "BROKERAGE", "realTimeNAV": "true"},
+            {"instType": "BROKERAGE", "realTimeNAV": "true", "accountType": "BROKER"},
+        ])
+        self.assertFalse(any("/orders/" in str(call) for call in FakeOAuth.calls))
+
+    def test_classification_check_reports_mismatch_and_never_trades(self):
+        self.connect()
+        with patch("production_readonly.get_balance", side_effect=[
+            {"accountMode": "MARGIN"}, {"accountMode": "CASH"}
+        ]):
+            response = self.client.get(
+                "/production-readonly/accounts/safe-account/classification-check",
+                headers=self.auth,
+            )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertFalse(response.json["cash_classification_consistent"])
+        self.assertFalse(response.json["trading_eligible"])
+        self.assertFalse(response.json["orders_enabled"])
+        self.assertFalse(any("/orders/" in str(call) for call in FakeOAuth.calls))
+
+    def test_classification_check_requires_auth(self):
+        response = self.client.get(
+            "/production-readonly/accounts/safe-account/classification-check"
+        )
+        self.assertEqual(response.status_code, 401)
+
     def test_size_buy_rounds_down_and_never_trades(self):
         self.connect()
         url = "/production-readonly/accounts/safe-account/size-buy"
