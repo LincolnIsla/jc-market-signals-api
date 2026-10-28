@@ -95,6 +95,10 @@ def create_reader_blueprint(admin_authorized, oauth_class=OAuth1Session):
     def guard():
         if not enabled():
             return jsonify(error="Production account reader is disabled"), 404
+        # Show only a static connection page without credentials. All data and
+        # actions still require the administrator's authenticated API request.
+        if request.endpoint == "production_reader.connect_ui":
+            return None
         if not admin_authorized():
             return jsonify(error="Administrator authentication required"), 401
         if request.method not in ("GET", "HEAD"):
@@ -154,6 +158,73 @@ def create_reader_blueprint(admin_authorized, oauth_class=OAuth1Session):
         if not found:
             raise ValueError("Account not in current active E*TRADE brokerage account list")
         return found
+
+    @bp.get("/connect-ui")
+    def connect_ui():
+        from flask import Response
+        html = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JC Market Signals - E*TRADE Production Account Reader</title>
+<style>
+body{font:16px system-ui,sans-serif;background:#f4f6fa;color:#18253d;max-width:760px;margin:30px auto;padding:0 18px}
+main{background:white;border:1px solid #d7deea;border-radius:14px;padding:24px}
+h1{font-size:24px}h2{font-size:18px;margin-top:24px}
+label{display:block;margin:14px 0 6px;font-weight:600}
+input,select{width:100%;box-sizing:border-box;padding:11px;border:1px solid #9cadc2;border-radius:8px}
+button{margin:12px 8px 0 0;padding:11px 14px;border-radius:8px;background:#174c92;color:white;border:0;cursor:pointer}
+button:disabled{background:#94a2b5}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf2fa;padding:12px;border-radius:7px}
+small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
+</style></head><body><main><h1>E*TRADE Production Account Reader</h1>
+<p class="warn">READ ONLY. No live buying, selling, or orders are enabled.</p>
+<p>This page is for checking production account access before preparing live trading. Use the ADMIN_TOKEN from Render, not your E*TRADE Consumer Secret. The token stays in this open page's memory only.</p>
+<label for="token">Render ADMIN_TOKEN</label><input id="token" type="password" autocomplete="off">
+<button id="status">Check status</button>
+<button id="start">1. Start production authorization</button>
+<p id="authorize" hidden><a id="approval" target="_blank" rel="noopener noreferrer">Open E*TRADE authorization</a> and copy the verification code.</p>
+<label for="verifier">E*TRADE verification code</label><input id="verifier" autocomplete="off">
+<button id="finish">2. Finish authorization</button>
+<h2>Read-only account verification</h2>
+<button id="accounts">3. Load accounts</button>
+<label for="account">Select one account</label><select id="account"><option value="">Load accounts first</option></select>
+<button id="balance">Check account balance</button>
+<button id="positions">Check holdings</button>
+<p><small>No data is stored by this page. Authorization may need to be repeated after Render restarts. Do not use the sandbox credentials or share your secret keys.</small></p>
+<pre id="output" role="status" aria-live="polite">Account reader not yet connected.</pre>
+</main><script>
+const $=id=>document.getElementById(id);
+const show=data=>{$('output').textContent=typeof data==='string'?data:JSON.stringify(data,null,2)};
+async function api(path,method='GET',body){
+ const token=$('token').value.trim();
+ if(!token)throw Error('Enter the ADMIN_TOKEN to access this page.');
+ const r=await fetch('/production-readonly'+path,{method,cache:'no-store',headers:{'Authorization':'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,credentials:'omit'});
+ const data=await r.json().catch(()=>({error:'Non-JSON server response'}));
+ if(!r.ok)throw Error(data.error||'Request failed.');
+ return data;
+}
+function run(fn){return async()=>{try{show('Requesting...');await fn()}catch(e){show(e.message)}}}
+$('status').onclick=run(async()=>show(await api('/status')));
+$('start').onclick=run(async()=>{
+ const d=await api('/connect/start','POST',{start:true});
+ const url=new URL(d.authorize_url);
+ if(url.protocol!=='https:'||url.hostname!=='us.etrade.com')throw Error('Unexpected E*TRADE authorization address');
+ $('approval').href=url.toString();$('authorize').hidden=false;
+ show('Open E*TRADE authorization link, approve access, then enter its verification code. This module only reads accounts.');
+});
+$('finish').onclick=run(async()=>{const d=await api('/connect/finish','POST',{verifier:$('verifier').value.trim()});$('verifier').value='';show(d)});
+$('accounts').onclick=run(async()=>{
+ const d=await api('/accounts');$('account').replaceChildren();
+ const placeholder=new Option('Choose an account','');$('account').add(placeholder);
+ for(const a of d.accounts||[]){if(a.accountIdKey){$('account').add(new Option((a.accountMode||'Unknown')+' · ending '+a.accountEnding,a.accountIdKey))}}
+ show({...d,accounts:(d.accounts||[]).map(a=>({...a,accountIdKey:'[hidden in display]'}))});
+});
+function selected(){const id=$('account').value;if(!id)throw Error('Select an account first');return encodeURIComponent(id)}
+$('balance').onclick=run(async()=>show(await api('/accounts/'+selected()+'/balance')));
+$('positions').onclick=run(async()=>show(await api('/accounts/'+selected()+'/positions')));
+</script></body></html>"""
+        return Response(html, mimetype="text/html", headers={
+            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            "Referrer-Policy": "no-referrer",
+        })
 
     @bp.get("/status")
     def status():
