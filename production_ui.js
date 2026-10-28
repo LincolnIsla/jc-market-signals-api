@@ -33,6 +33,7 @@ $('accounts').onclick=run(async()=>{
 });
 function selected(){const id=$('account').value;if(!id)throw Error('Select an account first');return encodeURIComponent(id)}
 $('balance').onclick=run(async()=>show(await api('/accounts/'+selected()+'/balance')));
+$('classify').onclick=run(async()=>show(await api('/accounts/'+selected()+'/classification-check')));
 $('positions').onclick=run(async()=>show(await api('/accounts/'+selected()+'/positions')));
 $('calculate').onclick=run(async()=>{
  const params=new URLSearchParams({symbol:$('symbol').value.trim().toUpperCase(),limit_price:$('limit').value.trim(),budget:$('budget').value.trim()});
