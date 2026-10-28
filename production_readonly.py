@@ -14,6 +14,8 @@ from urllib.parse import quote, urlencode
 from flask import Blueprint, jsonify, request
 from requests_oauthlib import OAuth1Session
 
+from production_checks import OrderBlocked, calculate_budgeted_buy
+
 API = "https://api.etrade.com"
 APP_ORIGIN = "https://jc-market-signals-api.onrender.com"
 AUTH_URL = "https://us.etrade.com/e/t/etws/authorize"
@@ -188,6 +190,12 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
 <label for="account">Select one account</label><select id="account"><option value="">Load accounts first</option></select>
 <button id="balance">Check account balance</button>
 <button id="positions">Check holdings</button>
+<h2>Whole-share budget calculator — estimate only</h2>
+<p><small>Enter your proposed limit price per share. The app will check current settled cash and round DOWN to whole shares with a 2% cost reserve. No trades or broker order previews occur here.</small></p>
+<label for="symbol">Stock symbol</label><input id="symbol" value="NVDA" autocomplete="off" maxlength="10">
+<label for="limit">Limit price per share ($)</label><input id="limit" value="" placeholder="e.g. 185.00" inputmode="decimal">
+<label for="budget">Maximum total budget ($)</label><input id="budget" value="1000.00" inputmode="decimal">
+<button id="calculate">Calculate Whole Shares — No Trade</button>
 <p><small>No data is stored by this page. Authorization may need to be repeated after Render restarts. Do not use the sandbox credentials or share your secret keys.</small></p>
 <pre id="output" role="status" aria-live="polite">Account reader not yet connected.</pre>
 </main><script>
@@ -220,6 +228,12 @@ $('accounts').onclick=run(async()=>{
 function selected(){const id=$('account').value;if(!id)throw Error('Select an account first');return encodeURIComponent(id)}
 $('balance').onclick=run(async()=>show(await api('/accounts/'+selected()+'/balance')));
 $('positions').onclick=run(async()=>show(await api('/accounts/'+selected()+'/positions')));
+$('calculate').onclick=run(async()=>{
+ const params=new URLSearchParams({symbol:$('symbol').value.trim().toUpperCase(),limit_price:$('limit').value.trim(),budget:$('budget').value.trim()});
+ const result=await api('/accounts/'+selected()+'/size-buy?'+params.toString());
+ if(result.order){result.order={...result.order,account_id:'[hidden in display]'}}
+ show(result);
+});
 </script></body></html>"""
         return Response(html, mimetype="text/html", headers={
             "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
@@ -327,6 +341,55 @@ $('positions').onclick=run(async()=>show(await api('/accounts/'+selected()+'/pos
             return jsonify(error=str(exc)), 409
         except Exception:
             return jsonify(error="Production balance lookup failed"), 502
+
+    @bp.get("/accounts/<account_key>/size-buy")
+    def size_buy(account_key):
+        """Calculate, but NEVER preview or submit, an actual E*TRADE order."""
+        try:
+            symbol = request.args.get("symbol", "")
+            price = request.args.get("limit_price", "")
+            budget = request.args.get("budget", "1000.00")
+            account = validate_account(account_key)
+            raw = production_get(
+                "/v1/accounts/" + quote(account_key, safe="") + "/balance.json",
+                params={"instType": "BROKERAGE", "realTimeNAV": "true"}
+            )
+            mapped = get_balance(raw)
+            # Only verified cash accounts are eligible; never treat margin
+            # buying power as settled cash or silently infer a cash account.
+            if account.get("accountMode") != "CASH" or mapped.get("accountMode") != "CASH":
+                raise OrderBlocked("Account must explicitly be CASH in both account and balance responses")
+            if account.get("institutionType") != "BROKERAGE" or mapped.get("institutionType") != "BROKERAGE":
+                raise OrderBlocked("Account and balance must both be a verified BROKERAGE account")
+            normalized = {
+                "accountId": account.get("accountId"),
+                "Computed": {key: mapped.get(key) for key in (
+                    "settledCashForInvestment",
+                    "cashAvailableForInvestment",
+                    "cashBuyingPower"
+                )}
+            }
+            proposed = calculate_budgeted_buy(
+                symbol, account, normalized,
+                price, budget
+            )
+            return jsonify(
+                **proposed, mode="calculation_only",
+                environment="production", orders_enabled=False,
+                broker_preview_performed=False, broker_order_submitted=False,
+                pricing_source="USER_ENTERED_LIMIT_PRICE",
+                message="Estimate only. No order was previewed or placed."
+            )
+        except (ValueError, OrderBlocked) as exc:
+            return jsonify(
+                error=str(exc), mode="calculation_only",
+                orders_enabled=False
+            ), 400
+        except Exception:
+            return jsonify(
+                error="Unable to verify current E*TRADE cash. No order placed.",
+                mode="calculation_only", orders_enabled=False
+            ), 502
 
     @bp.get("/accounts/<account_key>/positions")
     def positions(account_key):
