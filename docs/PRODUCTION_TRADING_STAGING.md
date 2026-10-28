@@ -87,3 +87,28 @@ python -m unittest discover -s tests -p 'test_production*.py' -v
 ```
 The GitHub workflow stages the same tests on the development branch.
 A passing test is **not** evidence of broker production compatibility.
+
+## Fixed-dollar BUY sizing (staged, not connected to a trading route)
+
+\`production_checks.calculate_budgeted_buy(..., budget="1000.00")\`
+creates a proposed whole-share **limit BUY**; it does not place or
+preview anything with the broker. It rounds DOWN using exact decimal
+arithmetic.
+
+For example, a $1,000 budget and $185.00 limit price yields **5 shares**,
+$925 at the limit, and an additional $18.50 (2%) allowance. The remainder
+of the spending budget is untouched. If 1 share cannot fit inside both
+budget and available settled cash after the allowance, the order is
+blocked instead of rounded up.
+
+Budget is a ceiling on the *estimated gross cost including the 2%
+allowance*, whereas the existing $1,000 order-notional limit is
+separate. The allowance is a conservative reserve, not an actual broker
+fee quote. Prices must be rounded to no more than two decimals; inputs
+cannot demand fractional shares.
+
+This calculator is not wired into the live website or backend routes.
+Before any future LIVE use, recalculate with up-to-date limit price,
+cash/positions and open orders immediately before preview and confirm,
+and compare the E*TRADE preview's actual total and account before any
+placement. Never buy on the basis of stale scanner prices.
