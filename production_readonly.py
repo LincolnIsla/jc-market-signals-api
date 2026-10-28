@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode
 from flask import Blueprint, jsonify, request
 from requests_oauthlib import OAuth1Session
 
-from production_checks import OrderBlocked, calculate_budgeted_buy
+from production_checks import OrderBlocked, calculate_budgeted_buy, estimate_whole_shares_budget_only
 
 API = "https://api.etrade.com"
 APP_ORIGIN = "https://jc-market-signals-api.onrender.com"
@@ -347,12 +347,24 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
                 params={"instType": "BROKERAGE", "realTimeNAV": "true"}
             )
             mapped = get_balance(raw)
-            # Only verified cash accounts are eligible; never treat margin
-            # buying power as settled cash or silently infer a cash account.
-            if account.get("accountMode") != "CASH" or mapped.get("accountMode") != "CASH":
-                raise OrderBlocked("Account must explicitly be CASH in both account and balance responses")
-            if account.get("institutionType") != "BROKERAGE" or mapped.get("institutionType") != "BROKERAGE":
-                raise OrderBlocked("Account and balance must both be a verified BROKERAGE account")
+            # Never pretend a margin-enabled, inconsistent, or unclassified
+            # account is cash-only. Instead return NON-EXECUTABLE math based
+            # solely on the user's entered budget and limit price. This branch
+            # does NOT use broker buying power or permit trading.
+            if (account.get("accountMode") != "CASH"
+                    or mapped.get("accountMode") != "CASH"
+                    or account.get("institutionType") != "BROKERAGE"
+                    or mapped.get("institutionType") != "BROKERAGE"):
+                proposed = estimate_whole_shares_budget_only(symbol, price, budget)
+                proposed.update(
+                    account_mode_from_list=account.get("accountMode"),
+                    account_mode_from_balance=mapped.get("accountMode"),
+                    institution_from_list=account.get("institutionType"),
+                    institution_from_balance=mapped.get("institutionType"),
+                    environment="production",
+                    message="Estimate only. E*TRADE did not verify this account as CASH in both account and balance records. No available cash was used to size this estimate, and no order was previewed or placed.",
+                )
+                return jsonify(proposed)
             normalized = {
                 "accountId": account.get("accountId"),
                 "Computed": {key: mapped.get(key) for key in (
