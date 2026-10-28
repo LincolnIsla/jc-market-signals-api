@@ -2,6 +2,7 @@ name: Validate staged production safeguards
 on:
   push:
     branches:
+      - main
       - feature/live-trading-guardrails-20261028
   pull_request:
     branches:
