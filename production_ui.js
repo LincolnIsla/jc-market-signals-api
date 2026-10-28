@@ -1,6 +1,12 @@
 // Static production read-only connection controls; no tokens are persisted.
 const $=id=>document.getElementById(id);
-const show=data=>{$('output').textContent=typeof data==='string'?data:JSON.stringify(data,null,2)};
+const show=data=>{
+ const panel=$('output');
+ panel.textContent=typeof data==='string'?data:JSON.stringify(data,null,2);
+ // Results are higher on this page than the account/balance controls.
+ // Always bring the response into view when any button is clicked.
+ panel.scrollIntoView({behavior:'smooth',block:'center'});
+};
 async function api(path,method='GET',body){
  const token=$('token').value.trim();
  if(!token)throw Error('Enter the ADMIN_TOKEN to access this page.');
