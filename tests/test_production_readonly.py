@@ -81,6 +81,18 @@ class ReadOnlyTests(unittest.TestCase):
         }, json={"verifier": "12345"})
         self.assertEqual(r.status_code, 200)
 
+    def test_status_output_is_directly_below_button(self):
+        page = self.client.get("/production-readonly/connect-ui")
+        self.assertEqual(page.status_code, 200)
+        html = page.get_data(as_text=True)
+        status = html.find('<button id="status">Check status</button>')
+        output = html.find('<pre id="output" role="status"')
+        authorize = html.find('<button id="start">')
+        self.assertGreaterEqual(status, 0)
+        self.assertGreater(output, status)
+        self.assertGreater(authorize, output)
+        self.assertIn("Connection messages appear here", html)
+
     def test_static_buttons_script_loads_without_credentials(self):
         with patch.dict(os.environ, {
             "ETRADE_PRODUCTION_READONLY_ENABLED": "false",
