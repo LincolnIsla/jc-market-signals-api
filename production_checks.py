@@ -88,3 +88,59 @@ def validate_cash_limit_order(order, account, balance, long_positions=None):
         "order_term": "GOOD_FOR_DAY",
         "cash_only": True,
     }
+
+
+def calculate_budgeted_buy(symbol, account, balance, limit_price, budget="1000.00"):
+    """Propose a whole-share BUY that fits both the budget and settled cash.
+
+    The budget is a per-order *ceiling*, not a promise to spend it all.
+    Both the order's limit-price notional and a 2% cost allowance fit
+    within that ceiling. This does NOT place, preview or approve a trade.
+    Broker data must be verified and refreshed at preview and placement.
+    """
+    requested = amount(budget, "purchase budget")
+    if requested <= 0 or requested > MAX_NOTIONAL or requested.as_tuple().exponent < -2:
+        raise OrderBlocked("Budget must be between $0.01 and $1,000, with at most two decimals")
+    price = amount(limit_price, "limit price")
+    if price <= 0 or price > Decimal("10000000") or price.as_tuple().exponent < -2:
+        raise OrderBlocked("Limit price must be positive with at most two decimals")
+    if not isinstance(balance, dict):
+        raise OrderBlocked("Verified account balances are required")
+    computed = balance.get("Computed") or balance.get("computedBalance")
+    if not isinstance(computed, dict):
+        raise OrderBlocked("Verified settled cash is required")
+    settled = amount(computed.get("settledCashForInvestment"), "settled cash")
+    available = amount(computed.get("cashAvailableForInvestment"), "available investment cash")
+    buying_power = amount(computed.get("cashBuyingPower"), "cash buying power")
+    spendable = min(requested, settled, available, buying_power)
+    # Decimal avoids float-rounding errors and never rounds a share up.
+    shares = int(spendable // (price * CASH_BUFFER))
+    if shares < 1:
+        raise OrderBlocked("Not enough budget or settled cash for one whole share")
+    if shares > 1000000:
+        raise OrderBlocked("Share quantity is over the permitted maximum")
+    if not isinstance(account, dict):
+        raise OrderBlocked("An active cash account is required")
+    order = {
+        "symbol": symbol,
+        "side": "BUY",
+        "quantity": shares,
+        "order_type": "LIMIT",
+        "limit_price": str(price),
+        "account_id": account.get("accountIdKey"),
+    }
+    validated = validate_cash_limit_order(order, account, balance)
+    notional = price * shares
+    estimated_reserve = notional * CASH_BUFFER
+    return {
+        "order": validated,
+        "requested_budget": str(requested),
+        "shares": shares,
+        "limit_price": str(price),
+        "estimated_purchase_at_limit": str(notional),
+        "cost_allowance_2pct": str(estimated_reserve - notional),
+        "budget_remaining_after_allowance": str(requested - estimated_reserve),
+        "broker_preview_required": True,
+        "requires_explicit_confirmation": True,
+        "orders_enabled": False,
+    }
