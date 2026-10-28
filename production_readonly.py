@@ -184,6 +184,8 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
 <p>This page is for checking production account access before preparing live trading. Use the ADMIN_TOKEN from Render, not your E*TRADE Consumer Secret. The token stays in this open page's memory only.</p>
 <label for="token">Render ADMIN_TOKEN</label><input id="token" type="password" autocomplete="off">
 <button id="status">Check status</button>
+<p><small>Connection messages appear here immediately after clicking a button:</small></p>
+<pre id="output" role="status" aria-live="polite">Loading page controls... If this stays unchanged, reload with Ctrl+Shift+R.</pre>
 <button id="start">1. Start production authorization</button>
 <p id="authorize" hidden><a id="approval" target="_blank" rel="noopener noreferrer">Open E*TRADE authorization</a> and copy the verification code.</p>
 <label for="verifier">E*TRADE verification code</label><input id="verifier" autocomplete="off">
@@ -200,7 +202,7 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
 <label for="budget">Maximum total budget ($)</label><input id="budget" value="1000.00" inputmode="decimal">
 <button id="calculate">Calculate Whole Shares — No Trade</button>
 <p><small>No data is stored by this page. Authorization may need to be repeated after Render restarts. Do not use the sandbox credentials or share your secret keys.</small></p>
-<pre id="output" role="status" aria-live="polite">Loading page controls... If this stays unchanged, reload with Ctrl+Shift+R.</pre>
+
 </main><script defer src="/production-readonly/connect-ui.js"></script></body></html>"""
         return Response(html, mimetype="text/html", headers={
             "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
