@@ -67,6 +67,9 @@ def database():
                'token_hash TEXT PRIMARY KEY, account_key TEXT NOT NULL, '
                'created REAL NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL, '
                'generation TEXT NOT NULL, payload TEXT NOT NULL, broker_id TEXT)')
+    db.execute('CREATE TABLE IF NOT EXISTS live_cash_bindings ('
+               'ending TEXT PRIMARY KEY, account_key TEXT NOT NULL UNIQUE, '
+               'account_id_hash TEXT NOT NULL)')
     return db
 
 
@@ -176,15 +179,55 @@ def create_live_blueprint(authorized, broker_factory):
             raise ValueError('Account list unavailable')
         return records(data['Accounts'].get('Account', []))
 
+    def funding_policy(account, all_accounts):
+        """Explicit cash-FUNDED policy, not a claim about borrowing permissions.
+
+        Resolve only one broker-owned account matching the configured ending,
+        then bind its complete broker key and ID hash durably. Later sessions
+        cannot silently replace it with another account having the same ending.
+        """
+        endings = {v for v in setting_accounts('ETRADE_CASH_FUNDED_ACCOUNT_ENDINGS')
+                   if re.fullmatch(r'[0-9]{4}', v)}
+        account_id = str(account.get('accountId', ''))
+        ending = account_id[-4:]
+        if ending not in endings:
+            return False
+        if not re.fullmatch(r'[0-9]{4,20}', account_id):
+            raise ValueError('Broker account identity is invalid')
+        matches = [a for a in all_accounts if str(a.get('accountId', ''))[-4:] == ending]
+        if len(matches) != 1 or matches[0].get('accountIdKey') != account.get('accountIdKey'):
+            raise ValueError('Account ending is ambiguous. Enable the exact account key instead')
+        if (account.get('accountMode') != 'CASH' or account.get('institutionType') != 'BROKERAGE'
+                or account.get('accountStatus') != 'ACTIVE'):
+            raise ValueError('Cash-funded policy requires an active CASH brokerage account in the account list')
+        key = account.get('accountIdKey')
+        if not isinstance(key, str) or not key:
+            raise ValueError('Broker account key is missing')
+        identity = hashlib.sha256(account_id.encode()).hexdigest()
+        with database() as db:
+            db.execute('BEGIN IMMEDIATE')
+            bound = db.execute('SELECT * FROM live_cash_bindings WHERE ending=?', (ending,)).fetchone()
+            if bound is None:
+                db.execute('INSERT INTO live_cash_bindings VALUES (?,?,?)', (ending, key, identity))
+            elif bound['account_key'] != key or bound['account_id_hash'] != identity:
+                raise ValueError('Configured account identity changed. Operator review required')
+        return True
+
     def verified_account(key):
-        if key not in setting_accounts('ETRADE_LIVE_ACCOUNT_ALLOWLIST'):
+        explicitly_allowed = key in setting_accounts('ETRADE_LIVE_ACCOUNT_ALLOWLIST')
+        if not explicitly_allowed and not setting_accounts('ETRADE_CASH_FUNDED_ACCOUNT_ENDINGS'):
             raise ValueError('Account has not been enabled on the server')
-        if key not in setting_accounts('ETRADE_VERIFIED_CASH_ACCOUNT_KEYS'):
+        if (not setting_accounts('ETRADE_CASH_FUNDED_ACCOUNT_ENDINGS')
+                and key not in setting_accounts('ETRADE_VERIFIED_CASH_ACCOUNT_KEYS')):
             raise ValueError('Broker cash-only permissions have not been verified')
-        rows = [a for a in account_list() if a.get('accountIdKey') == key]
+        all_accounts = account_list()
+        rows = [a for a in all_accounts if a.get('accountIdKey') == key]
         if len(rows) != 1 or rows[0].get('accountId') is None:
             raise ValueError('Active account identity unavailable')
-        return rows[0]
+        funded = funding_policy(rows[0], all_accounts)
+        if not funded and (not explicitly_allowed or key not in setting_accounts('ETRADE_VERIFIED_CASH_ACCOUNT_KEYS')):
+            raise ValueError('Account has no configured cash-funded order policy')
+        return {**rows[0], '_cash_funded_policy': funded}
 
     def reject_open_orders(key):
         # Conservative first release: no new order while ANY open/cancel-pending
@@ -235,7 +278,10 @@ def create_live_blueprint(authorized, broker_factory):
         balance = broker('GET', key, 'balance', params={'instType': 'BROKERAGE', 'realTimeNAV': 'true'}).get('BalanceResponse')
         if not isinstance(balance, dict) or balance.get('accountId') is None:
             raise ValueError('Broker balance identity is missing')
-        if balance.get('accountMode') != 'CASH' or balance.get('institutionType') != 'BROKERAGE':
+        funded = account['_cash_funded_policy']
+        if (balance.get('institutionType') not in (None, '', 'BROKERAGE')
+                or (not funded and balance.get('institutionType') != 'BROKERAGE')
+                or balance.get('accountMode') not in (('CASH', 'MARGIN') if funded else ('CASH',))):
             raise ValueError('CASH/MARGIN classification is not verified; live trading remains blocked')
         reject_open_orders(key)
         owned = positions(key, account) if order.get('side') == 'SELL' else None
@@ -277,10 +323,12 @@ def create_live_blueprint(authorized, broker_factory):
         try:
             allowed = setting_accounts('ETRADE_LIVE_ACCOUNT_ALLOWLIST')
             verified = setting_accounts('ETRADE_VERIFIED_CASH_ACCOUNT_KEYS')
+            endings = setting_accounts('ETRADE_CASH_FUNDED_ACCOUNT_ENDINGS')
             return jsonify(environment='production', accounts=[{
                 'id': a.get('accountIdKey'), 'ending': str(a.get('accountId', ''))[-4:],
                 'mode': a.get('accountMode'), 'status': a.get('accountStatus'),
-                'enabled_for_live': a.get('accountIdKey') in allowed & verified,
+                'enabled_for_live': (a.get('accountIdKey') in allowed & verified
+                                     or str(a.get('accountId', ''))[-4:] in endings),
             } for a in account_list()])
         except Exception as exc:
             return jsonify(environment='production', error=str(exc) if isinstance(exc, ValueError) else 'Unable to load production accounts'), 409
@@ -291,20 +339,23 @@ def create_live_blueprint(authorized, broker_factory):
         data = request.get_json(silent=True) or {}
         key = data.get('account_id') if isinstance(data, dict) else None
         try:
-            account = next((a for a in account_list() if a.get('accountIdKey') == key), None)
+            all_accounts = account_list()
+            account = next((a for a in all_accounts if a.get('accountIdKey') == key), None)
             if not account or not isinstance(key, str) or not key:
                 raise ValueError('Select an account from E*TRADE')
             raw = broker('GET', key, 'balance', params={'instType':'BROKERAGE','realTimeNAV':'true'}).get('BalanceResponse')
             if not isinstance(raw, dict):
                 raise ValueError('Broker balance unavailable')
             blockers = []
-            if account.get('accountMode') != 'CASH' or raw.get('accountMode') != 'CASH':
+            funded = funding_policy(account, all_accounts)
+            if (account.get('accountMode') != 'CASH'
+                    or raw.get('accountMode') not in (('CASH','MARGIN') if funded else ('CASH',))):
                 blockers.append('CASH/MARGIN classification requires broker verification')
             if account.get('accountStatus') != 'ACTIVE':
                 blockers.append('Account status from E*TRADE: ' + str(account.get('accountStatus') or 'not provided') + ' (expected ACTIVE)')
             if account.get('institutionType') != 'BROKERAGE':
                 blockers.append('Account-list institution type: ' + str(account.get('institutionType') or 'not provided') + ' (expected BROKERAGE)')
-            if raw.get('institutionType') != 'BROKERAGE':
+            if raw.get('institutionType') not in ((None, '', 'BROKERAGE') if funded else ('BROKERAGE',)):
                 blockers.append('Balance institution type: ' + str(raw.get('institutionType') or 'not provided') + ' (expected BROKERAGE)')
             if raw.get('accountId') is None or str(raw.get('accountId')) != str(account.get('accountId')):
                 blockers.append('Balance account identity not verified')
@@ -319,15 +370,17 @@ def create_live_blueprint(authorized, broker_factory):
                 reject_open_orders(key)
             except ValueError as exc:
                 blockers.append(str(exc))
-            if key not in setting_accounts('ETRADE_LIVE_ACCOUNT_ALLOWLIST'):
+            if not funded and key not in setting_accounts('ETRADE_LIVE_ACCOUNT_ALLOWLIST'):
                 blockers.append('Account not yet enabled on server')
-            if key not in setting_accounts('ETRADE_VERIFIED_CASH_ACCOUNT_KEYS'):
+            if not funded and key not in setting_accounts('ETRADE_VERIFIED_CASH_ACCOUNT_KEYS'):
                 blockers.append('Cash-only broker permissions not yet verified')
             return jsonify(environment='production', account_ending=str(account.get('accountId',''))[-4:],
                            account_list_mode=account.get('accountMode'), balance_mode=raw.get('accountMode'),
                            blockers=blockers, ready_for_live_configuration=not blockers,
                            orders_enabled=enabled(), order_submitted=False,
-                           message='Account check only. No order was previewed or placed.')
+                           cash_funded_policy=funded,
+                           message=('Cash-funded orders only: fresh settled cash and a verified broker preview are required. '
+                                    if funded else '') + 'Account check only. No order was previewed or placed.')
         except Exception as exc:
             return jsonify(environment='production', order_submitted=False,
                            error=str(exc) if isinstance(exc, ValueError) else 'Account verification unavailable'), 409

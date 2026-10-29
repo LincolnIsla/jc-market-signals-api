@@ -8,23 +8,31 @@ credentials and endpoints remain separate.
 
 1. Authorize the separate production connection on the live-order page.
 2. Select the intended account and run **Check account — no trade**.
-3. Verify the actual production account, balance, settled-cash, open-order,
-   holdings and broker-preview response mappings. Tests use synthetic data;
-   they do not establish compatibility with a particular live account.
-4. Resolve any CASH/MARGIN discrepancy with E*TRADE before activation. This
-   first release intentionally refuses mismatching classifications. A
-   positive cash balance is not evidence of cash-only broker permissions.
-5. Configure the exact approved account keys in Render, as JSON arrays:
-   `ETRADE_LIVE_ACCOUNT_ALLOWLIST` and `ETRADE_VERIFIED_CASH_ACCOUNT_KEYS`.
-   The second list means cash-only broker permissions were independently
-   verified. Never populate it merely to bypass a diagnostic failure.
+3. Verify the broker-owned account identity, active CASH account-list mode,
+   BROKERAGE institution type, fresh settled-cash fields, holdings and open
+   orders. The balance report's accountMode remains visible as a report label.
+4. For cash-FUNDED orders, configure `ETRADE_CASH_FUNDED_ACCOUNT_ENDINGS` as
+   a JSON array containing only the intended ending, for example `["4106"]`.
+   The backend must find exactly one matching broker-owned account. Its full
+   account key and account-ID hash are then durably bound on first check.
+   A later account with the same ending cannot silently replace that binding.
+   This setting does NOT assert that the broker disables all margin borrowing.
+5. Under this explicit policy, a CASH account-list entry may have a MARGIN
+   balance-report label. An omitted balance institutionType is tolerated only
+   when the fresh account list explicitly says BROKERAGE, the balance query
+   requested BROKERAGE, and the returned balance accountId matches. Conflicting
+   institution types, missing account identity, invalid cash fields, or a MARGIN
+   account-list mode still block. Margin buying-power fields are never used.
+   The legacy exact-key allowlist (`ETRADE_LIVE_ACCOUNT_ALLOWLIST`) plus
+   independently verified permissions (`ETRADE_VERIFIED_CASH_ACCOUNT_KEYS`)
+   remains available with its original stricter balance classification checks.
 6. `LIVE_ORDER_DB_PATH` defaults to
    `/var/data/jc-live-orders.sqlite3` on the existing persistent disk.
 7. Only after validation, set `ETRADE_LIVE_ORDERS_ENABLED=true` to allow
    broker previews and explicit placements. Remove or set this flag to
    `false` to disable both routes. The flag is checked again at submission.
 
-The settings above are deliberately **not** provided by the browser or set
+The server funding-policy settings above are deliberately **not** provided by the browser or set
 by the account-check button. Do not change `ETRADE_ENV` or sandbox keys.
 Production OAuth is shared with the existing production reader, stays on
 the server, and requires reconnection after a Render restart.
