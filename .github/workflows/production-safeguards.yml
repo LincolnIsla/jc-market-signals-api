@@ -19,10 +19,15 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt 'pytest>=8,<10'
       - name: Verify Python syntax without connecting to E*TRADE
-        run: python -m compileall -q app.py production_checks.py production_readonly.py tests
+        run: python -m compileall -q app.py production_checks.py production_readonly.py production_live.py tests
       - name: Verify connection-page JavaScript syntax
-        run: node --check production_ui.js
+        run: |
+          node --check production_ui.js
+          node --check live_ui.js
       - name: Offline safeguard and read-only API tests
         run: python -m unittest discover -s tests -p 'test_production*.py' -v
+
+      - name: Sandbox and secure-session regression tests
+        run: python -m pytest -q test_orders.py test_sessions.py --basetemp=.ci-test-data

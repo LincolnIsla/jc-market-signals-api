@@ -48,7 +48,7 @@ def connect_ui():
 
 @app.before_request
 def protect():
-    if request.path in ('/health', '/connect-ui') or request.path.startswith(('/trading/', '/auth/', '/production-readonly/')):
+    if request.path in ('/health', '/connect-ui') or request.path.startswith(('/trading/', '/auth/', '/production-readonly/', '/live-trading/')):
         return None
     if not ok_auth():
         return jsonify(error='Unauthorized'), 401
@@ -347,7 +347,7 @@ def valid_device():
             row = db.execute('SELECT * FROM device_sessions WHERE id_hash=?', (session_hash(token),)).fetchone()
             if not row or row['expires'] <= now or row['touched'] + row['idle'] <= now or row['generation'] != auth_generation():
                 return False
-            if request.method not in ('GET', 'HEAD') and request.headers.get('Origin') != TRADING_ORIGIN:
+            if request.method not in ('GET', 'HEAD') and request.headers.get('Origin') not in (TRADING_ORIGIN, 'https://jc-market-signals-api.onrender.com'):
                 return False
             db.execute('UPDATE device_sessions SET touched=? WHERE id_hash=?', (now, session_hash(token)))
         return True
@@ -364,7 +364,7 @@ def expire_device(response):
 @app.before_request
 def device_origin_guard():
     if request.path.startswith('/auth/') and request.method not in ('GET', 'HEAD'):
-        if request.headers.get('Origin') != TRADING_ORIGIN:
+        if request.headers.get('Origin') not in (TRADING_ORIGIN, 'https://jc-market-signals-api.onrender.com'):
             return jsonify(environment=mode, error='Origin is not allowed'), 403
     return None
 
@@ -433,4 +433,8 @@ def device_logout_all():
 # All production account-data and OAuth endpoints remain disabled by default
 # in the blueprint's before_request guard. No production trading endpoints.
 from production_readonly import create_reader_blueprint
-app.register_blueprint(create_reader_blueprint(ok_auth))
+production_reader = create_reader_blueprint(ok_auth)
+app.register_blueprint(production_reader)
+from production_live import create_live_blueprint
+app.register_blueprint(create_live_blueprint(ok_auth, production_reader.live_broker_factory))
+

@@ -109,7 +109,7 @@ def create_reader_blueprint(admin_authorized, oauth_class=OAuth1Session):
             return jsonify(error="Production account reader is disabled. Verify the production read-only flag and both production key variables in Render."), 404
         if request.method not in ("GET", "HEAD"):
             # Origin header required, including for same-origin POSTs.
-            if request.headers.get("Origin") != APP_ORIGIN:
+            if request.headers.get("Origin") not in (APP_ORIGIN, 'https://jc-market-signals.brave-rain-7832.chatgpt.site'):
                 return jsonify(error="Request origin not permitted"), 403
         return None
 
@@ -149,6 +149,22 @@ def create_reader_blueprint(admin_authorized, oauth_class=OAuth1Session):
         if not isinstance(data, dict):
             raise ValueError("Unexpected E*TRADE response")
         return data
+
+    def live_broker_factory():
+        # Share only the separately authorized production connection. The
+        # production order module still applies its own disabled-by-default guard.
+        if not enabled():
+            raise ValueError('Production connection is not configured')
+        with lock:
+            access = dict(state['access']) if state['access'] else None
+        if not access:
+            raise ValueError('Connect E*TRADE production first')
+        key, secret = keys()
+        return oauth_class(key, client_secret=secret,
+                           resource_owner_key=access['token'],
+                           resource_owner_secret=access['secret'])
+
+    bp.live_broker_factory = live_broker_factory
 
     def accounts():
         return get_accounts(production_get("/v1/accounts/list.json"))
@@ -462,3 +478,4 @@ small{color:#526179}.warn{color:#9b2b23;font-weight:700}a{color:#1354aa}
             return jsonify(error="Production portfolio lookup failed"), 502
 
     return bp
+
