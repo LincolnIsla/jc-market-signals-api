@@ -40,7 +40,10 @@ class FakeOAuth:
                 "institutionType": "BROKERAGE", "accountType": "BROKER"
             }]}}})
         if url.endswith("/balance.json"):
-            assert params == {"instType": "BROKERAGE", "realTimeNAV": "true"}
+            assert params in (
+                {"instType": "BROKERAGE", "realTimeNAV": "true"},
+                {"instType": "BROKERAGE", "realTimeNAV": "true", "accountType": "BROKER"},
+            )
             return FakeResponse({"BalanceResponse": {"accountMode": "CASH", "institutionType": "BROKERAGE", "Computed": {
                 "settledCashForInvestment": 500, "cashAvailableForInvestment": 1000,
                 "cashBuyingPower": 1000
