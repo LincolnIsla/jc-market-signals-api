@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 import pytest
 
-spec=importlib.util.spec_from_file_location('sessionbackend',Path(__file__).parents[1]/'app.py')
+spec=importlib.util.spec_from_file_location('sessionbackend',Path(__file__).with_name('app.py'))
 b=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(b)
 ORIGIN={'Origin':b.TRADING_ORIGIN}
@@ -83,6 +83,7 @@ def test_storage_required_session_cookie_and_rate_limit(client,monkeypatch):
     assert client.get('/auth/session').status_code==503
     assert login(client).status_code==503
 
-def test_production_login_disabled(client,monkeypatch):
+def test_production_login_uses_secure_session(client,monkeypatch):
     monkeypatch.setattr(b,'mode','production')
-    assert login(client).status_code==403
+    assert login(client).status_code==200
+

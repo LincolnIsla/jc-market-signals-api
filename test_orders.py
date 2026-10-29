@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-spec = importlib.util.spec_from_file_location('backend', Path(__file__).parents[1] / 'app.py')
+spec = importlib.util.spec_from_file_location('backend', Path(__file__).with_name('app.py'))
 backend = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(backend)
 
@@ -127,7 +127,7 @@ def test_timeout_never_retries(setup):
 def test_transport_uses_sandbox_literal_host_no_redirects(setup, monkeypatch):
     client, broker = setup
     # Exercise original transport, not the mocked helper.
-    source_spec = importlib.util.spec_from_file_location('transport', Path(__file__).parents[1] / 'app.py')
+    source_spec = importlib.util.spec_from_file_location('transport', Path(__file__).with_name('app.py'))
     transport = importlib.util.module_from_spec(source_spec)
     source_spec.loader.exec_module(transport)
     transport.key, transport.secret, transport.access = 'x', 'y', {'token': 'z', 'secret': 'w'}
@@ -139,3 +139,4 @@ def test_transport_uses_sandbox_literal_host_no_redirects(setup, monkeypatch):
     transport.sandbox_call('POST', '/v1/accounts/abc/orders/place.json', {})
     assert session.request.call_args.args[1].startswith('https://apisb.etrade.com/')
     assert session.request.call_args.kwargs['allow_redirects'] is False
+
