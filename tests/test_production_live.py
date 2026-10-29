@@ -89,6 +89,7 @@ class LiveTests(unittest.TestCase):
             'ADMIN_TOKEN': 'test-admin', 'ETRADE_LIVE_ORDERS_ENABLED': 'true',
             'ETRADE_LIVE_ACCOUNT_ALLOWLIST': '["safe"]',
             'ETRADE_VERIFIED_CASH_ACCOUNT_KEYS': '["safe"]',
+            'ETRADE_CASH_FUNDED_ACCOUNT_ENDINGS': '[]',
             'LIVE_ORDER_DB_PATH': self.temp.name+'/orders.db'})
         self.env.start()
         self.clock = patch('production_live.datetime')
@@ -137,6 +138,67 @@ class LiveTests(unittest.TestCase):
 
     def test_classification_mismatch_blocks(self):
         self.broker.balance['accountMode'] = 'MARGIN'
+        self.assertEqual(self.preview().status_code,409)
+        self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
+
+    def funded_policy(self):
+        os.environ['ETRADE_CASH_FUNDED_ACCOUNT_ENDINGS']='["6789"]'
+        os.environ['ETRADE_LIVE_ACCOUNT_ALLOWLIST']='[]'
+        os.environ['ETRADE_VERIFIED_CASH_ACCOUNT_KEYS']='[]'
+        self.broker.balance['accountMode']='MARGIN'
+        self.broker.balance.pop('institutionType',None)
+
+    def test_explicit_cash_funded_policy_accepts_balance_report_label(self):
+        self.funded_policy()
+        r=self.client.post('/live-trading/account-check',headers=self.headers,json={'account_id':'safe'})
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertTrue(r.json['cash_funded_policy'])
+        self.assertEqual(r.json['blockers'],[])
+        self.assertNotIn('cash_only_permissions_verified',r.json)
+        p=self.preview();self.assertEqual(p.status_code,200,p.json)
+        self.assertFalse(self.placements())
+        self.assertEqual(self.submit(p.json['preview_token']).status_code,200)
+
+    def test_cash_funded_policy_never_uses_margin_buying_power(self):
+        self.funded_policy()
+        self.broker.balance['Computed'].update(settledCashForInvestment=1,
+                                             marginBuyingPower=1000000,
+                                             dtMarginBuyingPower=1000000)
+        self.assertEqual(self.preview().status_code,409)
+        self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
+
+    def test_cash_funded_policy_still_requires_cash_account_list(self):
+        self.funded_policy();self.broker.account['accountMode']='MARGIN'
+        self.assertEqual(self.preview().status_code,409)
+        self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
+
+    def test_cash_funded_policy_rejects_other_institution(self):
+        self.funded_policy();self.broker.balance['institutionType']='GLOBALTRADING'
+        self.assertEqual(self.preview().status_code,409)
+        self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
+
+    def test_cash_funded_account_binding_cannot_be_replaced(self):
+        self.funded_policy()
+        r=self.client.post('/live-trading/account-check',headers=self.headers,json={'account_id':'safe'})
+        self.assertEqual(r.status_code,200,r.json)
+        self.broker.account['accountIdKey']='replacement'
+        self.assertEqual(self.preview({**ORDER,'account_id':'replacement'}).status_code,409)
+        self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
+
+    def test_cash_funded_policy_rejects_same_ending_ambiguity(self):
+        self.funded_policy()
+        original=self.broker.request
+        def duplicate(method,url,**kwargs):
+            r=original(method,url,**kwargs)
+            if url.endswith('/list.json'):
+                r.data['AccountListResponse']['Accounts']['Account'].append({**ACCOUNT,'accountIdKey':'other','accountId':'000006789'})
+            return r
+        self.broker.request=duplicate
+        self.assertEqual(self.preview().status_code,409)
+        self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
+
+    def test_unconfigured_ending_cannot_use_cash_funded_policy(self):
+        self.funded_policy();os.environ['ETRADE_CASH_FUNDED_ACCOUNT_ENDINGS']='["4106"]'
         self.assertEqual(self.preview().status_code,409)
         self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
 
