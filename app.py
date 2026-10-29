@@ -316,7 +316,7 @@ import hashlib
 from pathlib import Path
 
 DEVICE_COOKIE = '__Host-jc_device'
-SESSION_DB_PATH = os.getenv('AUTH_SESSION_DB_PATH', '')
+SESSION_DB_PATH = os.getenv('AUTH_SESSION_DB_PATH') or '/var/data/jc-device-sessions.sqlite3'
 DEVICE_LIFETIME = 30 * 86400
 DEVICE_IDLE = 7 * 86400
 _original_ok_auth = ok_auth
@@ -365,7 +365,7 @@ def expire_device(response):
 def device_origin_guard():
     if request.path.startswith('/auth/') and request.method not in ('GET', 'HEAD'):
         if request.headers.get('Origin') != TRADING_ORIGIN:
-            return jsonify(environment='sandbox', error='Origin is not allowed'), 403
+            return jsonify(environment=mode, error='Origin is not allowed'), 403
     return None
 
 @app.get('/auth/session')
@@ -374,28 +374,27 @@ def device_status():
         with session_db():
             pass
     except (RuntimeError, sqlite3.Error):
-        return jsonify(environment='sandbox', available=False, authenticated=False,
+        return jsonify(environment=mode, available=False, authenticated=False,
                        error='Remember This Device requires the backend session update and durable session storage'), 503
-    return jsonify(environment='sandbox', available=True, authenticated=valid_device())
+    return jsonify(environment=mode, available=True, authenticated=valid_device())
 
 @app.post('/auth/login')
 def device_login():
-    if mode != 'sandbox':
-        return jsonify(environment=mode, error='Production trading remains disabled'), 403
+    # Device authentication is independent of broker environment. Trading guards remain unchanged.
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict) or type(body.get('remember_device')) is not bool:
-        return jsonify(environment='sandbox', error='Choose whether to remember this device'), 400
+        return jsonify(environment=mode, error='Choose whether to remember this device'), 400
     try:
         with session_db() as db:
             now = time.time()
             db.execute('DELETE FROM device_login_attempts WHERE at < ?', (now - 60,))
             if db.execute('SELECT count(*) FROM device_login_attempts').fetchone()[0] >= 30:
-                return jsonify(environment='sandbox', error='Too many sign-in attempts. Try again in a minute.'), 429
+                return jsonify(environment=mode, error='Too many sign-in attempts. Try again in a minute.'), 429
             db.execute('INSERT INTO device_login_attempts VALUES (?)', (now,))
     except (RuntimeError, sqlite3.Error):
-        return jsonify(environment='sandbox', error='Backend device login needs durable AUTH_SESSION_DB_PATH storage'), 503
+        return jsonify(environment=mode, error='Backend device login needs durable AUTH_SESSION_DB_PATH storage'), 503
     if not _original_ok_auth():
-        return jsonify(environment='sandbox', error='Sign-in failed'), 401
+        return jsonify(environment=mode, error='Sign-in failed'), 401
     token = secrets.token_urlsafe(48)
     remember = body['remember_device']
     lifetime = DEVICE_LIFETIME if remember else 8 * 3600
@@ -406,7 +405,7 @@ def device_login():
         if old:
             db.execute('DELETE FROM device_sessions WHERE id_hash=?', (session_hash(old),))
         db.execute('INSERT INTO device_sessions VALUES (?,?,?,?,?,?)', (session_hash(token), now, now + lifetime, now, idle, auth_generation()))
-    response = jsonify(environment='sandbox', authenticated=True, remembered=remember, expires_at=now + lifetime)
+    response = jsonify(environment=mode, authenticated=True, remembered=remember, expires_at=now + lifetime)
     response.set_cookie(DEVICE_COOKIE, token, max_age=lifetime if remember else None,
                         path='/', secure=True, httponly=True, samesite='Lax')
     return response
@@ -418,16 +417,16 @@ def device_logout():
         with session_db() as db:
             db.execute('DELETE FROM device_sessions WHERE id_hash=?', (session_hash(token),))
     except (RuntimeError, sqlite3.Error):
-        return jsonify(environment='sandbox', error='Could not revoke server session. Retry Sign Out.'), 503
-    return expire_device(jsonify(environment='sandbox', authenticated=False))
+        return jsonify(environment=mode, error='Could not revoke server session. Retry Sign Out.'), 503
+    return expire_device(jsonify(environment=mode, authenticated=False))
 
 @app.post('/auth/logout-all')
 def device_logout_all():
     if not ok_auth():
-        return jsonify(environment='sandbox', error='Sign in first'), 401
+        return jsonify(environment=mode, error='Sign in first'), 401
     with session_db() as db:
         db.execute('DELETE FROM device_sessions')
-    return expire_device(jsonify(environment='sandbox', authenticated=False))
+    return expire_device(jsonify(environment=mode, authenticated=False))
 
 # Production ACCOUNT READER only. The static setup page remains reachable
 # even when credentials or feature flags have not yet been configured.
