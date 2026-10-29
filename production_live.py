@@ -300,9 +300,12 @@ def create_live_blueprint(authorized, broker_factory):
             blockers = []
             if account.get('accountMode') != 'CASH' or raw.get('accountMode') != 'CASH':
                 blockers.append('CASH/MARGIN classification requires broker verification')
-            if (account.get('accountStatus') != 'ACTIVE' or account.get('institutionType') != 'BROKERAGE'
-                    or raw.get('institutionType') != 'BROKERAGE'):
-                blockers.append('Active brokerage classification not verified')
+            if account.get('accountStatus') != 'ACTIVE':
+                blockers.append('Account status from E*TRADE: ' + str(account.get('accountStatus') or 'not provided') + ' (expected ACTIVE)')
+            if account.get('institutionType') != 'BROKERAGE':
+                blockers.append('Account-list institution type: ' + str(account.get('institutionType') or 'not provided') + ' (expected BROKERAGE)')
+            if raw.get('institutionType') != 'BROKERAGE':
+                blockers.append('Balance institution type: ' + str(raw.get('institutionType') or 'not provided') + ' (expected BROKERAGE)')
             if raw.get('accountId') is None or str(raw.get('accountId')) != str(account.get('accountId')):
                 blockers.append('Balance account identity not verified')
             computed = raw.get('Computed', raw.get('computedBalance', {}))

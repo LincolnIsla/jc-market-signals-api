@@ -140,6 +140,25 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.preview().status_code,409)
         self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
 
+    def test_account_check_names_missing_field_without_exposing_credentials(self):
+        self.broker.balance.pop('institutionType')
+        os.environ['ETRADE_LIVE_ORDERS_ENABLED'] = 'false'
+        r = self.client.post('/live-trading/account-check', headers=self.headers, json={'account_id':'safe'})
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertIn('Balance institution type: not provided (expected BROKERAGE)',r.json['blockers'])
+        self.assertFalse(r.json['order_submitted'])
+        self.assertFalse(any(c[0]=='POST' for c in self.broker.calls))
+        self.assertNotIn('test-admin',r.get_data(as_text=True))
+
+    def test_account_check_does_not_enable_account(self):
+        os.environ['ETRADE_LIVE_ORDERS_ENABLED']='false'
+        os.environ['ETRADE_LIVE_ACCOUNT_ALLOWLIST']='[]'
+        r = self.client.post('/live-trading/account-check', headers=self.headers, json={'account_id':'safe'})
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertIn('Account not yet enabled on server',r.json['blockers'])
+        self.assertEqual(os.environ['ETRADE_LIVE_ACCOUNT_ALLOWLIST'],'[]')
+        self.assertFalse(r.json['orders_enabled'])
+
     def test_balance_identity_mismatch_blocks(self):
         self.broker.balance['accountId'] = 'other'
         self.assertEqual(self.preview().status_code,409)
