@@ -31,8 +31,27 @@ $('accounts').onclick=run(async()=>{
  for(const a of d.accounts||[]){if(a.accountIdKey){$('account').add(new Option((a.accountMode||'Unknown')+' · ending '+a.accountEnding,a.accountIdKey))}}
  show({...d,accounts:(d.accounts||[]).map(a=>({...a,accountIdKey:'[hidden in display]'}))});
 });
+function balanceDisplay(data){
+ const amount=value=>{
+  if(value===null||value===undefined||value===''||!Number.isFinite(Number(value)))return 'Not returned by E*TRADE';
+  return Number(value).toLocaleString('en-US',{style:'currency',currency:'USD'});
+ };
+ return [
+  'E*TRADE cash balances · account ending '+String(data.accountEnding||'Unavailable'),
+  '',
+  'Settled cash for investment: '+amount(data.settledCashForInvestment),
+  'Cash available for investment: '+amount(data.cashAvailableForInvestment),
+  'Cash buying power (broker-reported): '+amount(data.cashBuyingPower),
+  'Unsettled cash for investment: '+amount(data.unSettledCashForInvestment),
+  '',
+  'Balance-report classification: '+String(data.accountMode||'Not returned'),
+  'This classification is a broker reporting label. It does not establish permission to borrow or trade on margin.',
+  'For your cash-only use, review the cash balances above. Margin buying power is not included in these displayed cash fields.',
+  'Read only. No order was placed and no account permissions were changed.'
+ ].join('\n');
+}
 function selected(){const id=$('account').value;if(!id)throw Error('Select an account first');return encodeURIComponent(id)}
-$('balance').onclick=run(async()=>show(await api('/accounts/'+selected()+'/balance')));
+$('balance').onclick=run(async()=>show(balanceDisplay(await api('/accounts/'+selected()+'/balance'))));
 $('classify').onclick=run(async()=>show(await api('/accounts/'+selected()+'/classification-check')));
 $('positions').onclick=run(async()=>show(await api('/accounts/'+selected()+'/positions')));
 $('calculate').onclick=run(async()=>{
